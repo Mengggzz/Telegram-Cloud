@@ -19,7 +19,7 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
         <activity
-            android:name=".MainActivity"
+            android:name="com.tgcloud.tgcloud.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
