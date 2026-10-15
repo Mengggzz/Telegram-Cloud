@@ -9,21 +9,33 @@ class TgUploadResult {
 }
 
 class TelegramStorageService {
-  final String botToken;
-  final String chatId;
-  final Dio dio;
+  String botToken;
+  String chatId;
+  Dio dio;
 
   TelegramStorageService({
     required this.botToken,
     required this.chatId,
     Dio? dio,
-  }) : dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: 'https://api.telegram.org/bot$botToken/',
-              connectTimeout: const Duration(seconds: 30),
-              sendTimeout: const Duration(seconds: 90),
-              receiveTimeout: const Duration(seconds: 90),
-            ));
+  }) : dio = dio ?? _buildDio(botToken);
+
+  static Dio _buildDio(String botToken) {
+    return Dio(BaseOptions(
+      baseUrl: 'https://api.telegram.org/bot$botToken/',
+      connectTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 90),
+      receiveTimeout: const Duration(seconds: 90),
+    ));
+  }
+
+  bool get isConfigured => botToken.isNotEmpty && chatId.isNotEmpty;
+
+  /// Dipanggil setelah user menyimpan konfigurasi di layar Pengaturan.
+  void updateConfig({required String botToken, required String chatId}) {
+    this.botToken = botToken;
+    this.chatId = chatId;
+    dio = _buildDio(botToken);
+  }
 
   Future<TgUploadResult> sendDocument(
     List<int> chunkBytes,

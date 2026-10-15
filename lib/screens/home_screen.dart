@@ -5,6 +5,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/download_service.dart';
+import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/services/upload_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
 import 'package:tgcloud/widgets/file_card.dart';
@@ -13,12 +14,14 @@ import 'package:tgcloud/screens/settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final DatabaseService databaseService;
+  final TelegramStorageService telegramService;
   final UploadService uploadService;
   final DownloadService downloadService;
 
   const HomeScreen({
     super.key,
     required this.databaseService,
+    required this.telegramService,
     required this.uploadService,
     required this.downloadService,
   });
@@ -263,6 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 MaterialPageRoute(
                   builder: (_) => SettingsScreen(
                     databaseService: widget.databaseService,
+                    telegramService: widget.telegramService,
                     onPinChanged: (newPin) {
                       _userPin = newPin;
                     },
@@ -276,6 +280,47 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          // Peringatan bila Telegram belum dikonfigurasi
+          if (!widget.telegramService.isConfigured)
+            GestureDetector(
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SettingsScreen(
+                      databaseService: widget.databaseService,
+                      telegramService: widget.telegramService,
+                      onPinChanged: (newPin) {
+                        _userPin = newPin;
+                      },
+                    ),
+                  ),
+                );
+                setState(() {});
+                _loadFiles();
+              },
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.danger.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.danger),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Telegram belum dikonfigurasi. Ketuk untuk isi Bot Token & Chat ID.',
+                        style: TextStyle(color: AppTheme.danger, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           // Header Ringkasan
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
