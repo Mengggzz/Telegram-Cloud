@@ -303,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppTheme.danger.withOpacity(0.15),
+                  color: AppTheme.danger.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppTheme.danger),
                 ),

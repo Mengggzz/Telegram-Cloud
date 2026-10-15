@@ -34,6 +34,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: HomeScreen(
           databaseService: db,
+          telegramService: tg,
           uploadService: upload,
           downloadService: download,
         ),

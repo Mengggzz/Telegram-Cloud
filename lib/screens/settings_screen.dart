@@ -104,6 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _tgSaving = false;
       _tgStatus = 'Terhubung sebagai @$username';
     });
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Telegram terhubung (@$username).'),
