@@ -85,4 +85,4 @@ if /i "!CREATE_TAG!"=="y" (
 
 echo.
 echo Jendela akan tertutup otomatis dalam 5 detik...
-timeout /t 5 >nul
+%SystemRoot%\System32\timeout.exe /t 5 >nul 2>&1
