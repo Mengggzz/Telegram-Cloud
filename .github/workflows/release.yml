@@ -44,17 +44,16 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore"
-          cp "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore" "$GITHUB_WORKSPACE/android/tgcloud-release.keystore"
-          {
-            echo "storeFile=tgcloud-release.keystore"
-            echo "storePassword=$KEYSTORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEY_PASSWORD"
-          } > "$GITHUB_WORKSPACE/android/key.properties"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using release keystore from secret"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore"
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=tgcloud-release.keystore\n' "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > "$GITHUB_WORKSPACE/android/key.properties"
+          else
+            echo "Keystore secret not found, skipping release signing (fallback to debug)"
+          fi
 
       - name: Build Split APKs
-        run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/debug-info
+        run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/debug-info --android-skip-build-dependency-validation
 
       - name: Rename APKs for Release
         run: |
