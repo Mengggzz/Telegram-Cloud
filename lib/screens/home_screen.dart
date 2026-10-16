@@ -9,6 +9,7 @@ import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/services/upload_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
 import 'package:tgcloud/widgets/file_card.dart';
+import 'package:tgcloud/widgets/adaptive.dart';
 import 'package:tgcloud/screens/upload_progress_sheet.dart';
 import 'package:tgcloud/screens/settings_screen.dart';
 
@@ -88,23 +89,17 @@ class _HomeScreenState extends State<HomeScreen> {
     StateSetter? sheetSetState;
 
     if (!mounted) return;
-    showModalBottomSheet(
+    // Desktop: dialog terpusat. Mobile: bottom sheet (lihat UploadProgressSheet.show).
+    UploadProgressSheet.show(
       context: context,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            sheetSetState = setModalState;
-            return UploadProgressSheet(
-              filename: filename,
-              progress: progress,
-              statusText: status,
-              onCancel: () {
-                Navigator.pop(ctx);
-              },
-            );
+      builder: (ctx, setModalState) {
+        sheetSetState = setModalState;
+        return UploadProgressSheet(
+          filename: filename,
+          progress: progress,
+          statusText: status,
+          onCancel: () {
+            Navigator.pop(ctx);
           },
         );
       },
@@ -254,10 +249,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Layar lebar (desktop): tombol unggah pindah ke AppBar, FAB disembunyikan,
+    // konten dibatasi lebarnya agar tidak melebar penuh.
+    final wide = isWideScreen(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('TGCloud'),
         actions: [
+          if (wide)
+            TextButton.icon(
+              onPressed: _pickAndUpload,
+              icon: const Icon(Icons.cloud_upload_rounded, color: AppTheme.primary),
+              label: const Text(
+                'Unggah File',
+                style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: AppTheme.textPrimary),
             onPressed: () async {
@@ -278,166 +285,170 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // Peringatan bila Telegram belum dikonfigurasi
-          if (!widget.telegramService.isConfigured)
-            GestureDetector(
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => SettingsScreen(
-                      databaseService: widget.databaseService,
-                      telegramService: widget.telegramService,
-                      onPinChanged: (newPin) {
-                        _userPin = newPin;
-                      },
+      body: CenteredConstrained(
+        child: Column(
+          children: [
+            // Peringatan bila Telegram belum dikonfigurasi
+            if (!widget.telegramService.isConfigured)
+              GestureDetector(
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => SettingsScreen(
+                        databaseService: widget.databaseService,
+                        telegramService: widget.telegramService,
+                        onPinChanged: (newPin) {
+                          _userPin = newPin;
+                        },
+                      ),
                     ),
+                  );
+                  setState(() {});
+                  _loadFiles();
+                },
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.danger.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.danger),
                   ),
-                );
-                setState(() {});
-                _loadFiles();
-              },
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppTheme.danger.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.danger),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Telegram belum dikonfigurasi. Ketuk untuk isi Bot Token & Chat ID.',
-                        style: TextStyle(color: AppTheme.danger, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          // Header Ringkasan
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                Column(
-                  children: [
-                    const Text('Total File', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${_files.length}',
-                      style: const TextStyle(
-                        color: AppTheme.primary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                Container(width: 1, height: 35, color: AppTheme.border),
-                Column(
-                  children: [
-                    const Text('Kapasitas Terpakai', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Text(
-                      _formatTotalSize(_totalBytes),
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          // Search Bar
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: TextField(
-              style: const TextStyle(color: AppTheme.textPrimary),
-              decoration: InputDecoration(
-                hintText: 'Cari nama file...',
-                hintStyle: const TextStyle(color: AppTheme.textMuted),
-                prefixIcon: const Icon(Icons.search, color: AppTheme.primary),
-                filled: true,
-                fillColor: AppTheme.surface,
-                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppTheme.border),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppTheme.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppTheme.primary),
-                ),
-              ),
-              onChanged: (val) {
-                _searchQuery = val;
-                _loadFiles();
-              },
-            ),
-          ),
-
-          // File List
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
-                : _files.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.cloud_queue_rounded, size: 64, color: AppTheme.textMuted),
-                            SizedBox(height: 12),
-                            Text('Belum ada file di cloud', style: TextStyle(color: AppTheme.textMuted, fontSize: 16)),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
-                        color: AppTheme.primary,
-                        onRefresh: _loadFiles,
-                        child: ListView.builder(
-                          itemCount: _files.length,
-                          itemBuilder: (ctx, i) {
-                            final file = _files[i];
-                            return FileCard(
-                              file: file,
-                              onDownload: () => _downloadFile(file),
-                              onDelete: () => _deleteFile(file),
-                            );
-                          },
+                  child: const Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Telegram belum dikonfigurasi. Ketuk untuk isi Bot Token & Chat ID.',
+                          style: TextStyle(color: AppTheme.danger, fontSize: 13),
                         ),
                       ),
-          ),
-        ],
+                    ],
+                  ),
+                ),
+              ),
+            // Header Ringkasan
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  Column(
+                    children: [
+                      const Text('Total File', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_files.length}',
+                        style: const TextStyle(
+                          color: AppTheme.primary,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(width: 1, height: 35, color: AppTheme.border),
+                  Column(
+                    children: [
+                      const Text('Kapasitas Terpakai', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatTotalSize(_totalBytes),
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // Search Bar
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: TextField(
+                style: const TextStyle(color: AppTheme.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'Cari nama file...',
+                  hintStyle: const TextStyle(color: AppTheme.textMuted),
+                  prefixIcon: const Icon(Icons.search, color: AppTheme.primary),
+                  filled: true,
+                  fillColor: AppTheme.surface,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppTheme.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppTheme.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppTheme.primary),
+                  ),
+                ),
+                onChanged: (val) {
+                  _searchQuery = val;
+                  _loadFiles();
+                },
+              ),
+            ),
+
+            // File List
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                  : _files.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.cloud_queue_rounded, size: 64, color: AppTheme.textMuted),
+                              SizedBox(height: 12),
+                              Text('Belum ada file di cloud', style: TextStyle(color: AppTheme.textMuted, fontSize: 16)),
+                            ],
+                          ),
+                        )
+                      : RefreshIndicator(
+                          color: AppTheme.primary,
+                          onRefresh: _loadFiles,
+                          child: ListView.builder(
+                            itemCount: _files.length,
+                            itemBuilder: (ctx, i) {
+                              final file = _files[i];
+                              return FileCard(
+                                file: file,
+                                onDownload: () => _downloadFile(file),
+                                onDelete: () => _deleteFile(file),
+                              );
+                            },
+                          ),
+                        ),
+            ),
+          ],
+        ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppTheme.primary,
-        foregroundColor: Colors.black,
-        icon: const Icon(Icons.cloud_upload_rounded),
-        label: const Text('Unggah File', style: TextStyle(fontWeight: FontWeight.bold)),
-        onPressed: _pickAndUpload,
-      ),
+      floatingActionButton: wide
+          ? null
+          : FloatingActionButton.extended(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.black,
+              icon: const Icon(Icons.cloud_upload_rounded),
+              label: const Text('Unggah File', style: TextStyle(fontWeight: FontWeight.bold)),
+              onPressed: _pickAndUpload,
+            ),
     );
   }
 }

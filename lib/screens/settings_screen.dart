@@ -3,6 +3,7 @@ import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
+import 'package:tgcloud/widgets/adaptive.dart';
 
 class SettingsScreen extends StatefulWidget {
   final DatabaseService databaseService;
@@ -165,8 +166,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         title: const Text('Pengaturan & Cadangan'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      // Desktop: form dibatasi lebarnya dan ditengahkan agar tidak melebar penuh.
+      body: CenteredConstrained(
+        maxWidth: 640,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
         children: [
           // Seksi Koneksi Telegram
           const Text('Koneksi Telegram', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold, fontSize: 14)),
@@ -291,6 +295,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         ],
+        ),
       ),
     );
   }

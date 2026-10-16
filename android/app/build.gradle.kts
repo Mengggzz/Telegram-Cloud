@@ -26,11 +26,34 @@ android {
         versionName = flutter.versionName
     }
 
+    // Keystore permanen via android/key.properties (dibuat oleh CI dari GitHub Secrets).
+    // Tanpa key.properties (build lokal di PC), fallback ke debug key seperti sebelumnya.
+    val keystorePropertiesFile = rootProject.file("key.properties")
+    val hasReleaseKeystore = keystorePropertiesFile.exists()
+    val keystoreProperties = java.util.Properties()
+    if (hasReleaseKeystore) {
+        keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                // Fallback lokal: debug key (tidak untuk rilis publik)
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

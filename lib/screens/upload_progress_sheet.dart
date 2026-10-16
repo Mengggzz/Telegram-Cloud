@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tgcloud/theme/app_theme.dart';
+import 'package:tgcloud/widgets/adaptive.dart';
 
 class UploadProgressSheet extends StatelessWidget {
   final String filename;
@@ -14,6 +15,36 @@ class UploadProgressSheet extends StatelessWidget {
     required this.statusText,
     required this.onCancel,
   });
+
+  /// Tampilkan progres upload: bottom sheet di layar sempit (mobile),
+  /// dialog terpusat di layar lebar (desktop).
+  static Future<T?> show<T>({
+    required BuildContext context,
+    required Widget Function(BuildContext context, StateSetter setModalState) builder,
+  }) {
+    if (isWideScreen(context)) {
+      return showDialog<T>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: StatefulBuilder(builder: builder),
+            ),
+          ),
+        ),
+      );
+    }
+    return showModalBottomSheet<T>(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(builder: builder),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
