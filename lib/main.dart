@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:tgcloud/screens/home_screen.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/download_service.dart';
@@ -9,6 +11,11 @@ import 'package:tgcloud/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
 
   final databaseService = DatabaseService();
   await databaseService.init();

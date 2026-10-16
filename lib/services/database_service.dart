@@ -1,5 +1,6 @@
+import 'dart:io';
 import 'package:path/path.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/models/cloud_chunk.dart';
 
@@ -11,6 +12,11 @@ class DatabaseService {
 
   Future<void> init() async {
     if (_db != null) return;
+
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
     if (inMemory) {
       _db = await openDatabase(
         inMemoryDatabasePath,

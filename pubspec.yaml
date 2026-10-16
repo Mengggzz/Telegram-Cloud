@@ -41,11 +41,9 @@ dependencies:
   encrypt: ^5.0.3
   flutter_secure_storage: 11.2.0
   file_picker: ^13.1.0
-  permission_handler: ^11.3.1
   open_filex: ^4.5.0
   intl: ^0.19.0
   flutter_foreground_task: ^11.0.3
-  workmanager: ^0.10.10
 
 dev_dependencies:
   flutter_test:
