@@ -45,15 +45,21 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Using release keystore from secret"
-            echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore"
-            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=tgcloud-release.keystore\n' "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > "$GITHUB_WORKSPACE/android/key.properties"
+            echo "Decoding release keystore from secret..."
+            echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore"
+            if keytool -list -keystore "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+              echo "Keystore and credentials verified successfully."
+              printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=tgcloud-release.keystore\n' "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > "$GITHUB_WORKSPACE/android/key.properties"
+            else
+              echo "WARNING: Keystore verification failed with given credentials! Printing keytool diagnosis:"
+              keytool -list -keystore "$GITHUB_WORKSPACE/android/app/tgcloud-release.keystore" -storepass "$KEYSTORE_PASSWORD" 2>&1 || true
+            fi
           else
             echo "Keystore secret not found, skipping release signing (fallback to debug)"
           fi
 
       - name: Build Split APKs
-        run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/debug-info --android-skip-build-dependency-validation
+        run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/debug-info --android-skip-build-dependency-validation -v
 
       - name: Rename APKs for Release
         run: |

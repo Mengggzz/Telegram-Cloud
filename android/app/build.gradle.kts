@@ -30,21 +30,22 @@ android {
     }
 
     // Keystore permanen via android/key.properties (dibuat oleh CI dari GitHub Secrets).
-    // Tanpa key.properties (build lokal di PC), fallback ke debug key seperti sebelumnya.
+    // Tanpa key.properties atau jika file keystore tidak ada, fallback ke debug key.
     val keystorePropertiesFile = rootProject.file("key.properties")
-    val hasReleaseKeystore = keystorePropertiesFile.exists()
     val keystoreProperties = Properties()
-    if (hasReleaseKeystore) {
+    val hasReleaseKeystore = keystorePropertiesFile.exists() && run {
         keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+        val storeFileName = keystoreProperties.getProperty("storeFile")
+        !storeFileName.isNullOrEmpty() && file(storeFileName).exists()
     }
 
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
             }
         }
     }
