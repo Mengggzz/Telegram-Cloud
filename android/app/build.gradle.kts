@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -30,9 +33,9 @@ android {
     // Tanpa key.properties (build lokal di PC), fallback ke debug key seperti sebelumnya.
     val keystorePropertiesFile = rootProject.file("key.properties")
     val hasReleaseKeystore = keystorePropertiesFile.exists()
-    val keystoreProperties = java.util.Properties()
+    val keystoreProperties = Properties()
     if (hasReleaseKeystore) {
-        keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+        keystoreProperties.load(FileInputStream(keystorePropertiesFile))
     }
 
     signingConfigs {
