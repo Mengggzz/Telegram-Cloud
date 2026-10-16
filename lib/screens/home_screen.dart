@@ -1,5 +1,7 @@
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:tgcloud/models/cloud_file.dart';
@@ -36,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _searchQuery = '';
   String _userPin = '123456'; // Default PIN sesi
+  bool _dragging = false; // File sedang di-drag ke jendela (desktop)
 
   @override
   void initState() {
@@ -80,10 +83,20 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _pickAndUpload() async {
     final pickedFile = await FilePicker.pickFile();
     if (pickedFile == null || pickedFile.path == null) return;
+    await _uploadPath(pickedFile.path!, pickedFile.name);
+  }
 
-    final path = pickedFile.path!;
-    final filename = pickedFile.name;
+  /// Upload beberapa file berurutan — dipakai drag & drop di desktop.
+  Future<void> _dropAndUpload(List<String> paths) async {
+    for (final path in paths) {
+      if (!mounted) return;
+      await _uploadPath(path, p.basename(path));
+    }
+  }
 
+  /// Alur upload satu file + dialog progres.
+  /// Dipakai bersama oleh file picker dan drag & drop.
+  Future<void> _uploadPath(String path, String filename) async {
     double progress = 0.0;
     String status = 'Menyiapkan...';
     StateSetter? sheetSetState;
@@ -252,7 +265,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Layar lebar (desktop): tombol unggah pindah ke AppBar, FAB disembunyikan,
     // konten dibatasi lebarnya agar tidak melebar penuh.
     final wide = isWideScreen(context);
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(
         title: const Text('TGCloud'),
         actions: [
@@ -449,6 +462,73 @@ class _HomeScreenState extends State<HomeScreen> {
               label: const Text('Unggah File', style: TextStyle(fontWeight: FontWeight.bold)),
               onPressed: _pickAndUpload,
             ),
+    );
+
+    // Drag & drop file hanya di desktop: seluruh jendela jadi zona drop.
+    // Di mobile tidak berubah (tetap pakai file picker).
+    if (!isDesktop) return scaffold;
+    return DropTarget(
+      onDragEntered: (_) {
+        if (mounted) setState(() => _dragging = true);
+      },
+      onDragExited: (_) {
+        if (mounted) setState(() => _dragging = false);
+      },
+      onDragDone: (details) {
+        if (mounted) setState(() => _dragging = false);
+        final paths = details.files
+            .map((f) => f.path)
+            .where((path) => path.isNotEmpty)
+            .toList();
+        if (paths.isNotEmpty) _dropAndUpload(paths);
+      },
+      child: Stack(
+        children: [
+          scaffold,
+          if (_dragging) _buildDropOverlay(),
+        ],
+      ),
+    );
+  }
+
+  /// Overlay saat file sedang di-drag ke atas jendela (desktop).
+  Widget _buildDropOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.6),
+        padding: const EdgeInsets.all(28),
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppTheme.primary, width: 2),
+          ),
+          child: const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_upload_rounded,
+                    color: AppTheme.primary, size: 64),
+                SizedBox(height: 16),
+                Text(
+                  'Letakkan file di sini',
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'File akan langsung diunggah ke TGCloud',
+                  style:
+                      TextStyle(color: AppTheme.textMuted, fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

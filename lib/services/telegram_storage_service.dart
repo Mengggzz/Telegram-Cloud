@@ -78,7 +78,17 @@ class TelegramStorageService {
           continue;
         }
 
-        if (attempts >= maxRetries) rethrow;
+        final desc = e.response?.data is Map ? e.response?.data['description'] : null;
+        if (e.response?.statusCode == 400 && desc != null) {
+          throw Exception('Telegram error 400: $desc');
+        }
+
+        if (attempts >= maxRetries) {
+          if (desc != null) {
+            throw Exception('Telegram error: $desc');
+          }
+          rethrow;
+        }
         await Future.delayed(Duration(seconds: 2 * attempts));
       }
     }

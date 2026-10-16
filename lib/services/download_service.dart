@@ -91,8 +91,7 @@ class DownloadService {
 
     // Verifikasi SHA-256 end-to-end
     onProgress?.call(0.99, 'Memverifikasi integritas file...');
-    final completeBytes = await outputFile.readAsBytes();
-    final finalHash = CryptoService.calculateSha256(completeBytes);
+    final finalHash = await CryptoService.calculateFileSha256(outputFile.path);
 
     if (finalHash != cloudFile.sha256Original) {
       await outputFile.delete();

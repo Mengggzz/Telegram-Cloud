@@ -23,8 +23,7 @@ class BackupService {
   Future<List<File>> filterNewFiles(List<File> files) async {
     final newFiles = <File>[];
     for (final file in files) {
-      final bytes = await file.readAsBytes();
-      final hash = CryptoService.calculateSha256(bytes);
+      final hash = await CryptoService.calculateFileSha256(file.path);
       final existing = await databaseService.getFileByHash(hash);
       if (existing == null) {
         newFiles.add(file);

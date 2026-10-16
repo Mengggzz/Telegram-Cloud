@@ -1,7 +1,16 @@
+import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
+import 'package:flutter/foundation.dart';
+
+/// Dijalankan di isolate latar via compute(): baca file secara streaming
+/// (memori konstan) lalu kembalikan hex digest SHA-256.
+/// Harus fungsi top-level agar bisa dikirim ke isolate.
+Future<String> _hashFileBackground(String filePath) async {
+  final digest = await sha256.bind(File(filePath).openRead()).first;
+  return digest.toString();
+}
 
 class CryptoService {
   static final Random _secureRandom = Random.secure();
@@ -52,5 +61,13 @@ class CryptoService {
 
   static String calculateSha256(List<int> bytes) {
     return sha256.convert(bytes).toString();
+  }
+
+  /// Hitung SHA-256 sebuah file langsung dari disk.
+  /// Dijalankan di isolate latar + streaming, sehingga UI tidak freeze
+  /// dan memori tetap kecil walau file ratusan MB/GB.
+  /// (Menggantikan pola readAsBytes + calculateSha256 untuk file besar.)
+  static Future<String> calculateFileSha256(String filePath) {
+    return compute(_hashFileBackground, filePath);
   }
 }

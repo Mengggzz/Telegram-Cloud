@@ -41,9 +41,9 @@ class UploadService {
 
     onProgress?.call(0.01, 'Menghitung hash file...');
 
-    // Streaming calculate SHA-256 file asli
-    final originalBytes = await file.readAsBytes();
-    final sha256Original = CryptoService.calculateSha256(originalBytes);
+    // SHA-256 dihitung di isolate latar (streaming dari disk) agar UI
+    // tidak freeze untuk file besar. Lihat CryptoService.calculateFileSha256.
+    final sha256Original = await CryptoService.calculateFileSha256(filePath);
 
     // Cek deduplikasi
     final existing = await databaseService.getFileByHash(sha256Original);
@@ -118,8 +118,34 @@ class UploadService {
 
     // Worker pool upload maks 2 paralel
     int completedCount = 0;
+    int uploadedBytes = 0;
     final poolSize = min(2, totalChunks);
     int nextChunkIndex = 0;
+    // Sampel (waktu, totalBytes) untuk menghitung kecepatan rolling 5 detik.
+    final speedSamples = <MapEntry<DateTime, int>>[];
+    final uploadStart = DateTime.now();
+
+    /// Kecepatan upload dalam Mbps, dihitung dari sampel 5 detik terakhir
+    /// agar angka stabil (tidak lompat-lompat per chunk).
+    String currentSpeedMbps() {
+      final now = DateTime.now();
+      speedSamples.add(MapEntry(now, uploadedBytes));
+      while (speedSamples.length > 2 &&
+          now.difference(speedSamples.first.key).inSeconds > 5) {
+        speedSamples.removeAt(0);
+      }
+      double mbps;
+      if (speedSamples.length >= 2) {
+        final dt = now.difference(speedSamples.first.key).inMilliseconds / 1000.0;
+        final db = uploadedBytes - speedSamples.first.value;
+        mbps = dt > 0 ? (db * 8 / 1000000) / dt : -1;
+      } else {
+        final dt = now.difference(uploadStart).inMilliseconds / 1000.0;
+        mbps = dt > 0.5 ? (uploadedBytes * 8 / 1000000) / dt : -1;
+      }
+      if (mbps < 0) return '...';
+      return '${mbps.toStringAsFixed(1).replaceAll('.', ',')} Mbps';
+    }
 
     Future<void> worker() async {
       while (true) {
@@ -160,8 +186,12 @@ class UploadService {
         );
 
         completedCount++;
+        uploadedBytes += encryptedSlice.length;
         final progress = completedCount / totalChunks;
-        onProgress?.call(progress, 'Mengunggah chunk $completedCount dari $totalChunks');
+        onProgress?.call(
+          progress,
+          'Mengunggah chunk $completedCount dari $totalChunks \u2022 ${currentSpeedMbps()}',
+        );
       }
     }
 
