@@ -4,9 +4,9 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
+  fc_native_video_thumbnail
   flutter_secure_storage_windows
   local_auth_windows
-  permission_handler_windows
   share_plus
   url_launcher_windows
 )

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
+import 'package:fc_native_video_thumbnail/fc_native_video_thumbnail.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:tgcloud/config/app_config.dart';
@@ -11,7 +12,6 @@ import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/services/crypto_service.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 typedef UploadProgressCallback = void Function(double progress, String status);
 typedef UploadLogCallback = void Function(String message);
@@ -113,10 +113,11 @@ class UploadService {
           thumbRaw = Uint8List.fromList(img.encodeJpg(resized, quality: 70));
         }
       } else if (mime.startsWith('video/')) {
-        thumbRaw = await VideoThumbnail.thumbnailData(
-          video: filePath,
-          imageFormat: ImageFormat.JPEG,
-          maxWidth: 320,
+        final plugin = FcNativeVideoThumbnail();
+        thumbRaw = await plugin.saveThumbnailToBytes(
+          srcFile: filePath,
+          width: 320,
+          height: 320,
           quality: 70,
         );
       }

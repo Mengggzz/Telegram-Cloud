@@ -88,25 +88,27 @@ class _PreviewScreenState extends State<PreviewScreen> {
       if (!mounted) return;
 
       if (widget.file.mime.startsWith('video/')) {
-        _videoPlayerController = VideoPlayerController.file(resultFile);
-        await _videoPlayerController!.initialize();
-        _chewieController = ChewieController(
-          videoPlayerController: _videoPlayerController!,
-          autoPlay: true,
-          looping: false,
-          allowFullScreen: true,
-          aspectRatio: _videoPlayerController!.value.aspectRatio > 0
-              ? _videoPlayerController!.value.aspectRatio
-              : 16 / 9,
-          errorBuilder: (context, errorMessage) {
-            return Center(
-              child: Text(
-                'Gagal memutar video: $errorMessage',
-                style: const TextStyle(color: AppTheme.danger),
-              ),
-            );
-          },
-        );
+        if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+          _videoPlayerController = VideoPlayerController.file(resultFile);
+          await _videoPlayerController!.initialize();
+          _chewieController = ChewieController(
+            videoPlayerController: _videoPlayerController!,
+            autoPlay: true,
+            looping: false,
+            allowFullScreen: true,
+            aspectRatio: _videoPlayerController!.value.aspectRatio > 0
+                ? _videoPlayerController!.value.aspectRatio
+                : 16 / 9,
+            errorBuilder: (context, errorMessage) {
+              return Center(
+                child: Text(
+                  'Gagal memutar video: $errorMessage',
+                  style: const TextStyle(color: AppTheme.danger),
+                ),
+              );
+            },
+          );
+        }
       }
 
       setState(() {
@@ -215,8 +217,26 @@ class _PreviewScreenState extends State<PreviewScreen> {
       );
     }
 
-    if (widget.file.mime.startsWith('video/') && _chewieController != null) {
-      return Chewie(controller: _chewieController!);
+    if (widget.file.mime.startsWith('video/')) {
+      if (_chewieController != null) {
+        return Chewie(controller: _chewieController!);
+      }
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.video_file_rounded, color: AppTheme.primary, size: 64),
+          const SizedBox(height: 16),
+          Text(
+            widget.file.nama,
+            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Pemutar video langsung tersedia di perangkat mobile (Android/iOS).',
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+          ),
+        ],
+      );
     }
 
     return Column(
