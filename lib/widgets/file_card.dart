@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/theme/app_theme.dart';
@@ -7,6 +8,8 @@ class FileCard extends StatelessWidget {
   final VoidCallback onDownload;
   final VoidCallback onDelete;
   final VoidCallback? onResume;
+  final VoidCallback? onPreview;
+  final Future<Uint8List?> Function()? thumbLoader;
 
   const FileCard({
     super.key,
@@ -14,6 +17,8 @@ class FileCard extends StatelessWidget {
     required this.onDownload,
     required this.onDelete,
     this.onResume,
+    this.onPreview,
+    this.thumbLoader,
   });
 
   String _formatSize(int bytes) {
@@ -32,6 +37,21 @@ class FileCard extends StatelessWidget {
     return Icons.insert_drive_file_rounded;
   }
 
+  Widget _ikonGenerik() {
+    return Container(
+      width: 48,
+      height: 48,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceLight,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Center(
+        child: Icon(_getIcon(), color: AppTheme.primary, size: 28),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -44,14 +64,22 @@ class FileCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceLight,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(_getIcon(), color: AppTheme.primary, size: 28),
-          ),
+          thumbLoader != null
+              ? FutureBuilder<Uint8List?>(
+                  future: thumbLoader!(),
+                  builder: (ctx, snap) => snap.data != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.memory(
+                            snap.data!,
+                            width: 48,
+                            height: 48,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : _ikonGenerik(),
+                )
+              : _ikonGenerik(),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -81,13 +109,23 @@ class FileCard extends StatelessWidget {
               tooltip: 'Lanjutkan Upload',
               onPressed: onResume,
             )
-          else
+          else ...[
+            if (onPreview != null &&
+                (file.mime.startsWith('image/') || file.mime.startsWith('video/')))
+              IconButton(
+                icon: const Icon(Icons.visibility_outlined, color: AppTheme.primary),
+                tooltip: 'Pratinjau',
+                onPressed: onPreview,
+              ),
             IconButton(
               icon: const Icon(Icons.download_rounded, color: AppTheme.primary),
+              tooltip: 'Unduh',
               onPressed: onDownload,
             ),
+          ],
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted),
+            tooltip: 'Hapus',
             onPressed: onDelete,
           ),
         ],

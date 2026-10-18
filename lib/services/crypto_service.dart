@@ -61,17 +61,12 @@ class HashProgress {
   });
 }
 
-Uint8List _encryptChunkBackground(List<dynamic> args) {
-  final chunkBytes = args[0] as List<int>;
-  final keyBytes = args[1] as List<int>;
-  final nonceHex = args[2] as String;
-  return Uint8List.fromList(CryptoService.encryptChunk(chunkBytes, keyBytes, nonceHex));
-}
-
 class ChunkProcessResult {
   final Uint8List bytes;
   final String sha256;
   ChunkProcessResult({required this.bytes, required this.sha256});
+
+  String get sha256Hex => sha256;
 }
 
 ChunkProcessResult _encryptAndHashChunkBackground(List<dynamic> args) {
@@ -109,7 +104,7 @@ class CryptoService {
     return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
-  static Uint8List _hexToBytes(String hex) {
+  static Uint8List hexToBytes(String hex) {
     final result = Uint8List(hex.length ~/ 2);
     for (int i = 0; i < hex.length; i += 2) {
       result[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
@@ -117,8 +112,12 @@ class CryptoService {
     return result;
   }
 
+  static String bytesToHex(List<int> bytes) {
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   static List<int> deriveKey(String pin, String saltHex, {int iterations = 10000}) {
-    final saltBytes = _hexToBytes(saltHex);
+    final saltBytes = hexToBytes(saltHex);
     final hmac = Hmac(sha256, saltBytes);
     var derived = hmac.convert(pin.codeUnits).bytes;
     for (int i = 1; i < iterations; i++) {
@@ -129,7 +128,7 @@ class CryptoService {
 
   static List<int> encryptChunk(List<int> chunkBytes, List<int> keyBytes, String nonceHex) {
     final key = enc.Key(Uint8List.fromList(keyBytes));
-    final iv = enc.IV(_hexToBytes(nonceHex));
+    final iv = enc.IV(hexToBytes(nonceHex));
     final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm));
     final encrypted = encrypter.encryptBytes(chunkBytes, iv: iv);
     return encrypted.bytes;
@@ -137,7 +136,7 @@ class CryptoService {
 
   static List<int> decryptChunk(List<int> encryptedBytes, List<int> keyBytes, String nonceHex) {
     final key = enc.Key(Uint8List.fromList(keyBytes));
-    final iv = enc.IV(_hexToBytes(nonceHex));
+    final iv = enc.IV(hexToBytes(nonceHex));
     final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.gcm));
     final decrypted = encrypter.decryptBytes(enc.Encrypted(Uint8List.fromList(encryptedBytes)), iv: iv);
     return decrypted;
@@ -187,23 +186,22 @@ class CryptoService {
     throw Exception('Gagal menghitung hash file: $filePath');
   }
 
-  /// Enkripsi chunk di isolate latar agar UI tidak freeze.
-  static Future<enc.Encrypted> encryptChunkIsolate(
-    List<int> chunkBytes,
-    List<int> keyBytes,
-    String nonceHex,
-  ) async {
-    final bytes = await compute(_encryptChunkBackground, [chunkBytes, keyBytes, nonceHex]);
-    return enc.Encrypted(bytes);
-  }
-
-  /// Enkripsi chunk sekaligus hitung SHA-256 di isolate latar agar UI tidak freeze.
-  static Future<ChunkProcessResult> encryptAndHashChunkIsolate(
+  /// Enkripsi chunk dan hitung SHA-256 di isolate latar agar UI tidak freeze.
+  static Future<ChunkProcessResult> encryptChunkIsolate(
     List<int> chunkBytes,
     List<int> keyBytes,
     String nonceHex,
   ) {
     return compute(_encryptAndHashChunkBackground, [chunkBytes, keyBytes, nonceHex]);
+  }
+
+  /// Alias untuk encryptChunkIsolate.
+  static Future<ChunkProcessResult> encryptAndHashChunkIsolate(
+    List<int> chunkBytes,
+    List<int> keyBytes,
+    String nonceHex,
+  ) {
+    return encryptChunkIsolate(chunkBytes, keyBytes, nonceHex);
   }
 
   /// Verifikasi integritas hash dan dekripsi chunk di isolate latar.

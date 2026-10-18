@@ -1,5 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:tgcloud/services/app_lock_service.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/manifest_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
@@ -36,6 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _chatIdController = TextEditingController();
   String _tgStatus = 'Belum dikonfigurasi';
   bool _tgSaving = false;
+  bool _appLockEnabled = false;
+  bool _biometricEnabled = false;
+  bool _canBiometric = false;
+  String _biometricDesc = 'Biometrik';
 
   @override
   void initState() {
@@ -56,6 +64,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final lastTime = await widget.databaseService.getSetting('last_backup_time');
     final manifestSynced = await widget.databaseService.getSetting('manifest_synced_at');
     final tgConfig = await TelegramConfigService().load();
+    final lock = await AppLockService.isEnabled(widget.databaseService);
+    final bio = await AppLockService.isBiometricEnabled(widget.databaseService);
+    final canBio = await AppLockService.canUseBiometric();
+    final bioDesc = await AppLockService.getBiometricTypeDescription();
 
     if (!mounted) return;
     setState(() {
@@ -68,6 +80,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _tgStatus = tgConfig.isConfigured
           ? 'Terkonfigurasi'
           : 'Belum dikonfigurasi';
+      _appLockEnabled = lock;
+      _biometricEnabled = bio;
+      _canBiometric = canBio;
+      _biometricDesc = bioDesc;
     });
   }
 
@@ -120,6 +136,185 @@ class _SettingsScreenState extends State<SettingsScreen> {
         backgroundColor: AppTheme.success,
       ),
     );
+  }
+
+  Future<void> _exportTelegramConfig() async {
+    final token = _tokenController.text.trim();
+    final chatId = _chatIdController.text.trim();
+
+    if (token.isEmpty || chatId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Isi Bot Token dan Channel Chat ID sebelum mengekspor.'),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+      return;
+    }
+
+    final pinController = TextEditingController();
+    final exportChoice = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Ekspor Konfigurasi Bot & Channel',
+            style: TextStyle(color: AppTheme.textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Simpan Bot Token dan Channel Chat ID ke file (*.tgcfg) agar tidak perlu mengisi manual saat aplikasi diinstall ulang.',
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: pinController,
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: 6,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: 'PIN Enkripsi (opsional)',
+                hintText: 'Kosongkan jika tanpa sandi',
+                labelStyle: TextStyle(color: AppTheme.primary),
+                hintStyle: TextStyle(color: AppTheme.textMuted),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            onPressed: () => Navigator.pop(ctx, pinController.text.trim()),
+            child: const Text('Ekspor', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+
+    if (exportChoice == null) return;
+
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Menyiapkan file konfigurasi Telegram...')),
+        );
+      }
+      final configService = TelegramConfigService();
+      final file = await configService.exportToFile(
+        botToken: token,
+        chatId: chatId,
+        pin: exportChoice.isEmpty ? null : exportChoice,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Konfigurasi diekspor: ${file.path}'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengekspor: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _importTelegramConfig() async {
+    try {
+      final configService = TelegramConfigService();
+      final rawData = await configService.pickAndReadConfigFile();
+      if (rawData == null) return;
+
+      TelegramConfig importedConfig;
+      if (rawData['format'] == 'tgcloud-config' && rawData['is_encrypted'] == true) {
+        if (!mounted) return;
+        final pin = await _askPinDialog(
+          title: 'Buka Konfigurasi Terenkripsi',
+          actionLabel: 'Buka',
+        );
+        if (pin == null || pin.isEmpty) return;
+        importedConfig = TelegramConfigService.parseConfigEnvelope(rawData, pin: pin);
+      } else {
+        importedConfig = TelegramConfigService.parseConfigEnvelope(rawData);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _tokenController.text = importedConfig.botToken;
+        _chatIdController.text = importedConfig.chatId;
+      });
+
+      final shouldSave = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Konfigurasi Ditemukan', style: TextStyle(color: AppTheme.textPrimary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Channel ID: ${importedConfig.chatId}',
+                  style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text(
+                'Token: ${importedConfig.botToken.length > 10 ? "${importedConfig.botToken.substring(0, 8)}..." : "***"}',
+                style: const TextStyle(color: AppTheme.textMuted),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Simpan dan validasi koneksi Telegram sekarang?',
+                style: TextStyle(color: AppTheme.textMuted),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Isi Form Saja', style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Simpan & Validasi', style: TextStyle(color: Colors.black)),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldSave == true) {
+        await _saveTelegramConfig();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Konfigurasi dimuat ke formulir. Tekan "Simpan & Validasi" untuk mengaktifkan.'),
+              backgroundColor: AppTheme.primary,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengimpor: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _changePinDialog() async {
@@ -491,6 +686,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: const TextStyle(color: Colors.black),
                   ),
                 ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.primary,
+                          side: const BorderSide(color: AppTheme.border),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        icon: const Icon(Icons.file_upload_outlined, size: 18),
+                        label: const Text('Ekspor Bot ID', style: TextStyle(fontSize: 13)),
+                        onPressed: _exportTelegramConfig,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.primary,
+                          side: const BorderSide(color: AppTheme.border),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        icon: const Icon(Icons.file_download_outlined, size: 18),
+                        label: const Text('Impor Bot ID', style: TextStyle(fontSize: 13)),
+                        onPressed: _importTelegramConfig,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -508,6 +735,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
             onTap: _changePinDialog,
           ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            tileColor: AppTheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            activeThumbColor: AppTheme.primary,
+            title: const Text('Kunci Aplikasi', style: TextStyle(color: AppTheme.textPrimary)),
+            subtitle: const Text('Minta PIN/biometrik saat aplikasi dibuka', style: TextStyle(color: AppTheme.textMuted)),
+            value: _appLockEnabled,
+            onChanged: (val) async {
+              setState(() => _appLockEnabled = val);
+              await AppLockService.setEnabled(widget.databaseService, val);
+            },
+          ),
+          if (_canBiometric) ...[
+            const SizedBox(height: 8),
+            SwitchListTile(
+              tileColor: AppTheme.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              activeThumbColor: AppTheme.primary,
+              title: const Text('Buka dengan Biometrik', style: TextStyle(color: AppTheme.textPrimary)),
+              subtitle: Text(_biometricDesc, style: const TextStyle(color: AppTheme.textMuted)),
+              value: _biometricEnabled,
+              onChanged: _appLockEnabled
+                  ? (val) async {
+                      setState(() => _biometricEnabled = val);
+                      await AppLockService.setBiometricEnabled(widget.databaseService, val);
+                    }
+                  : null,
+            ),
+          ],
           const SizedBox(height: 24),
 
           // Seksi Jaringan & Transfer
@@ -572,6 +829,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const Divider(height: 1, color: AppTheme.border),
                 ListTile(
+                  leading: const Icon(Icons.key_outlined, color: AppTheme.primary),
+                  title: const Text('Ekspor Konfigurasi Bot (*.tgcfg)', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('Simpan Bot Token & Chat ID ke file terpisah', style: TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _exportTelegramConfig,
+                ),
+                const Divider(height: 1, color: AppTheme.border),
+                ListTile(
+                  leading: const Icon(Icons.vpn_key_outlined, color: AppTheme.primary),
+                  title: const Text('Impor Konfigurasi Bot (*.tgcfg)', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('Muat Bot Token & Chat ID dari file cadangan', style: TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _importTelegramConfig,
+                ),
+                const Divider(height: 1, color: AppTheme.border),
+                ListTile(
                   leading: const Icon(Icons.cloud_upload_outlined, color: AppTheme.primary),
                   title: const Text('Sinkronkan Index ke Telegram', style: TextStyle(color: AppTheme.textPrimary)),
                   subtitle: Text('Upload manifest terenkripsi ke channel\nTerakhir: ${_formatDate(_manifestSyncedAt)}', style: const TextStyle(color: AppTheme.textMuted)),
@@ -597,14 +870,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             leading: const Icon(Icons.cleaning_services_rounded, color: AppTheme.danger),
             title: const Text('Bersihkan Cache Sementara', style: TextStyle(color: AppTheme.danger)),
-            subtitle: const Text('Menghapus file parsial & unduhan sementara', style: TextStyle(color: AppTheme.textMuted)),
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Cache sementara berhasil dibersihkan.'),
-                  backgroundColor: AppTheme.surfaceLight,
-                ),
-              );
+            subtitle: const Text('Menghapus file parsial, pratinjau & unduhan sementara', style: TextStyle(color: AppTheme.textMuted)),
+            onTap: () async {
+              try {
+                final temp = await getTemporaryDirectory();
+                final previewDir = Directory(p.join(temp.path, 'tgcloud_preview'));
+                if (await previewDir.exists()) {
+                  await previewDir.delete(recursive: true);
+                }
+              } catch (_) {}
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Cache sementara berhasil dibersihkan.'),
+                    backgroundColor: AppTheme.surfaceLight,
+                  ),
+                );
+              }
             },
           ),
         ],

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:tgcloud/config/app_config.dart';
 import 'package:tgcloud/models/cloud_chunk.dart';
@@ -9,6 +11,7 @@ import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/services/crypto_service.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 typedef UploadProgressCallback = void Function(double progress, String status);
 typedef UploadLogCallback = void Function(String message);
@@ -96,6 +99,38 @@ class UploadService {
     final salt = CryptoService.generateSalt();
     final key = CryptoService.deriveKey(userPin, salt);
 
+    // Thumbnail terenkripsi (opsional; gagal -> null, upload tetap lanjut)
+    String? thumbDataHex;
+    String? thumbNonceHex;
+    try {
+      Uint8List? thumbRaw;
+      if (mime.startsWith('image/')) {
+        final rawBytes = await file.readAsBytes();
+        final decoded = img.decodeImage(rawBytes);
+        if (decoded != null) {
+          final resized = img.copyResize(decoded,
+              width: decoded.width > 320 ? 320 : decoded.width);
+          thumbRaw = Uint8List.fromList(img.encodeJpg(resized, quality: 70));
+        }
+      } else if (mime.startsWith('video/')) {
+        thumbRaw = await VideoThumbnail.thumbnailData(
+          video: filePath,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 320,
+          quality: 70,
+        );
+      }
+      if (thumbRaw != null && thumbRaw.lengthInBytes < 200 * 1024) {
+        final tNonce = CryptoService.generateNonce();
+        final tEnc = CryptoService.encryptChunk(thumbRaw, key, tNonce);
+        thumbDataHex = tEnc.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        thumbNonceHex = tNonce;
+        log('Thumbnail dibuat (${(thumbRaw.lengthInBytes / 1024).toStringAsFixed(0)} KB)');
+      }
+    } catch (e) {
+      log('Thumbnail dilewati: $e'); // mis. platform tak didukung
+    }
+
     final cloudFile = CloudFile(
       nama: filename,
       ukuranBytes: fileSize,
@@ -107,47 +142,19 @@ class UploadService {
       dibuatPada: DateTime.now().toIso8601String(),
       status: 'uploading',
       sumberPath: filePath,
+      thumbData: thumbDataHex,
+      thumbNonce: thumbNonceHex,
     );
 
     final fileId = await databaseService.insertFile(cloudFile);
     onFileIdCreated?.call(fileId);
 
-    // Siapkan baris chunk di database tanpa membaca isi file atau enkripsi di main isolate
-    final createdChunks = <CloudChunk>[];
-    for (int i = 0; i < totalChunks; i++) {
-      final start = i * chunkSize;
-      final currentLength = min(chunkSize, fileSize - start);
-      final nonce = CryptoService.generateNonce();
-      // AES-GCM menambah auth tag 16 byte ke ciphertext
-      final estimatedSize = currentLength + 16;
-
-      final chunk = CloudChunk(
-        fileId: fileId,
-        chunkIndex: i,
-        ukuranChunk: estimatedSize,
-        nonceHex: nonce,
-        sha256Chunk: '',
-        status: 'pending',
-      );
-
-      final chunkId = await databaseService.insertChunk(chunk);
-      createdChunks.add(CloudChunk(
-        id: chunkId,
-        fileId: fileId,
-        chunkIndex: i,
-        ukuranChunk: estimatedSize,
-        nonceHex: nonce,
-        sha256Chunk: '',
-        status: 'pending',
-      ));
-    }
-
-    // Worker pool upload maks 2 paralel
+    // ===== PIPELINE: tiap worker = baca -> enkripsi (isolate) -> upload.
+    // Menggantikan fase "persiapan semua chunk di awal" yang serial.
     int completedCount = 0;
     int uploadedBytes = 0;
-    final poolSize = min(2, totalChunks);
     int nextChunkIndex = 0;
-    // Sampel (waktu, totalBytes) untuk menghitung kecepatan rolling 5 detik.
+    final poolSize = min(AppConfig.maxUploadWorkers, totalChunks);
     final speedSamples = <MapEntry<DateTime, int>>[];
     final uploadStart = DateTime.now();
 
@@ -173,72 +180,79 @@ class UploadService {
       return '${mbps.toStringAsFixed(1).replaceAll('.', ',')} Mbps';
     }
 
+    log('Mulai upload pipeline: $totalChunks chunk, $poolSize worker paralel');
+
     Future<void> worker() async {
-      while (true) {
-        if (cancelToken?.isCancelled == true) {
-          throw Exception('Upload dibatalkan');
+      // Satu handle file per worker (RandomAccessFile tidak aman dipakai
+      // paralel dari satu handle yang sama).
+      final raf = await file.open(mode: FileMode.read);
+      int failStreak = 0;
+      try {
+        while (true) {
+          if (cancelToken?.isCancelled == true) {
+            throw Exception('Upload dibatalkan');
+          }
+          int currentIndex;
+          if (nextChunkIndex >= totalChunks) return;
+          currentIndex = nextChunkIndex++; // aman: single-threaded
+
+          try {
+            final start = currentIndex * chunkSize;
+            final len = min(chunkSize, fileSize - start);
+            await raf.setPosition(start);
+            final rawSlice = await raf.read(len);
+
+            final nonce = CryptoService.generateNonce();
+            // Enkripsi + hash di isolate latar (satu-satunya enkripsi:
+            // tidak ada lagi kerja ganda).
+            final enc = await CryptoService.encryptChunkIsolate(
+                rawSlice, key, nonce);
+
+            final chunkId = await databaseService.insertChunk(CloudChunk(
+              fileId: fileId,
+              chunkIndex: currentIndex,
+              ukuranChunk: enc.bytes.length,
+              nonceHex: nonce,
+              sha256Chunk: enc.sha256Hex,
+              status: 'uploading',
+            ));
+
+            final uploadResult = await telegramService.sendDocument(
+              enc.bytes,
+              '${enc.sha256Hex}.bin',
+              cancelToken: cancelToken,
+            );
+
+            await databaseService.updateChunkStatus(
+              chunkId,
+              'done',
+              tgFileId: uploadResult.fileId,
+              tgMessageId: uploadResult.messageId,
+            );
+
+            completedCount++;
+            failStreak = 0;
+            uploadedBytes += enc.bytes.length;
+            // Hash 1%-5%, upload 5%-100% (fase persiapan sudah tidak ada).
+            final progress = 0.05 + (completedCount / totalChunks) * 0.95;
+            final speed = currentSpeedMbps();
+            onProgress?.call(
+              progress,
+              'Mengunggah chunk $completedCount dari $totalChunks \u2022 $speed',
+            );
+            log('Chunk $completedCount/$totalChunks terunggah \u2022 $speed');
+          } catch (e) {
+            failStreak++;
+            if (failStreak >= 3) rethrow;
+            log('Worker retry ($failStreak/3): $e');
+          }
         }
-
-        int currentIndex;
-        if (nextChunkIndex >= totalChunks) return;
-        currentIndex = nextChunkIndex++;
-
-        final chunk = createdChunks[currentIndex];
-        await databaseService.updateChunkStatus(chunk.id!, 'uploading');
-
-        // Baca chunk dari file disk secara streaming
-        final rafWorker = await file.open(mode: FileMode.read);
-        List<int> rawSlice;
-        try {
-          await rafWorker.setPosition(currentIndex * chunkSize);
-          rawSlice = await rafWorker.read(min(chunkSize, fileSize - (currentIndex * chunkSize)));
-        } finally {
-          await rafWorker.close();
-        }
-
-        // Enkripsi dan SHA-256 chunk di isolate latar agar UI tidak freeze
-        final processed = await CryptoService.encryptAndHashChunkIsolate(
-          rawSlice,
-          key,
-          chunk.nonceHex,
-        );
-
-        await databaseService.updateChunkStatus(
-          chunk.id!,
-          'uploading',
-          sha256Chunk: processed.sha256,
-          ukuranChunk: processed.bytes.length,
-        );
-
-        final uploadResult = await telegramService.sendDocument(
-          processed.bytes,
-          '${processed.sha256}.bin',
-          cancelToken: cancelToken,
-        );
-
-        await databaseService.updateChunkStatus(
-          chunk.id!,
-          'done',
-          tgFileId: uploadResult.fileId,
-          tgMessageId: uploadResult.messageId,
-          sha256Chunk: processed.sha256,
-          ukuranChunk: processed.bytes.length,
-        );
-
-        completedCount++;
-        uploadedBytes += processed.bytes.length;
-        final progress = 0.05 + (completedCount / totalChunks) * 0.95;
-        final speedStr = currentSpeedMbps();
-        onProgress?.call(
-          progress,
-          'Mengunggah chunk $completedCount dari $totalChunks \u2022 $speedStr',
-        );
-        log('Chunk $completedCount/$totalChunks selesai diunggah ($speedStr)');
+      } finally {
+        await raf.close();
       }
     }
 
-    final workers = List.generate(poolSize, (_) => worker());
-    await Future.wait(workers);
+    await Future.wait(List.generate(poolSize, (_) => worker()));
 
     await databaseService.updateFileStatus(fileId, 'complete');
     log('Upload $filename berhasil diselesaikan 100%!');
@@ -284,79 +298,104 @@ class UploadService {
     final chunkSize = chunkSizeBytes ?? AppConfig.chunkSizeBytes;
 
     final allChunks = await databaseService.getChunksForFile(fileId);
-    allChunks.sort((a, b) => a.chunkIndex.compareTo(b.chunkIndex));
-    final pending = allChunks
-        .where((c) => c.status != 'done' || c.tgFileId == null)
-        .toList();
-    final alreadyDone = allChunks.length - pending.length;
-    final total = allChunks.length;
+    // chunkIndex -> row (bila ada)
+    final byIndex = {for (final c in allChunks) c.chunkIndex: c};
+    final pendingIdx = <int>[];
+    for (int i = 0; i < cloudFile.jumlahChunk; i++) {
+      final row = byIndex[i];
+      if (row == null || row.status != 'done' || row.tgFileId == null) {
+        pendingIdx.add(i);
+      }
+    }
+    final alreadyDone = cloudFile.jumlahChunk - pendingIdx.length;
+    final total = cloudFile.jumlahChunk;
 
     log('Melanjutkan upload: $alreadyDone/$total chunk sudah terunggah');
-    onProgress?.call(0.30, 'Melanjutkan: $alreadyDone/$total chunk sudah ada...');
 
     int completedCount = 0;
-    int nextIndex = 0;
-    final poolSize = 2; // sama seperti uploadFile
+    int nextPtr = 0;
+    final poolSize = min(AppConfig.maxUploadWorkers, pendingIdx.length);
 
     Future<void> worker() async {
-      while (true) {
-        if (cancelToken?.isCancelled == true) throw Exception('Upload dibatalkan');
-        if (nextIndex >= pending.length) return;
-        final chunk = pending[nextIndex++];
+      final raf = await srcFile.open(mode: FileMode.read);
+      int failStreak = 0;
+      try {
+        while (true) {
+          if (cancelToken?.isCancelled == true) {
+            throw Exception('Upload dibatalkan');
+          }
+          if (nextPtr >= pendingIdx.length) return;
+          final currentIndex = pendingIdx[nextPtr++];
 
-        await databaseService.updateChunkStatus(chunk.id!, 'uploading');
+          try {
+            final existing = byIndex[currentIndex];
 
-        final raf = await srcFile.open(mode: FileMode.read);
-        List<int> rawSlice;
-        try {
-          await raf.setPosition(chunk.chunkIndex * chunkSize);
-          rawSlice = await raf.read(
-              min(chunkSize, fileSize - (chunk.chunkIndex * chunkSize)));
-        } finally {
-          await raf.close();
+            // Bila baris lama punya pesan yatim (pernah 'done' tapi file_id
+            // hilang), hapus dulu agar tidak menumpuk di channel.
+            if (existing?.tgMessageId != null) {
+              try {
+                await telegramService.deleteMessage(existing!.tgMessageId!);
+              } catch (_) {}
+            }
+
+            final start = currentIndex * chunkSize;
+            final len = min(chunkSize, fileSize - start);
+            await raf.setPosition(start);
+            final rawSlice = await raf.read(len);
+
+            // Pakai nonce lama bila ada (hasil enkripsi deterministik,
+            // cocok dengan sha256_chunk yang tersimpan).
+            final nonce = existing?.nonceHex ?? CryptoService.generateNonce();
+            final enc = await CryptoService.encryptChunkIsolate(
+                rawSlice, key, nonce);
+
+            final int chunkId;
+            if (existing?.id != null) {
+              chunkId = existing!.id!;
+              await databaseService.updateChunkStatus(chunkId, 'uploading');
+            } else {
+              chunkId = await databaseService.insertChunk(CloudChunk(
+                fileId: fileId,
+                chunkIndex: currentIndex,
+                ukuranChunk: enc.bytes.length,
+                nonceHex: nonce,
+                sha256Chunk: enc.sha256Hex,
+                status: 'uploading',
+              ));
+            }
+
+            final uploadResult = await telegramService.sendDocument(
+              enc.bytes,
+              '${enc.sha256Hex}.bin',
+              cancelToken: cancelToken,
+            );
+
+            await databaseService.updateChunkStatus(
+              chunkId, 'done',
+              tgFileId: uploadResult.fileId,
+              tgMessageId: uploadResult.messageId,
+            );
+
+            completedCount++;
+            failStreak = 0;
+            final done = alreadyDone + completedCount;
+            onProgress?.call(
+              0.05 + (done / total) * 0.95,
+              'Mengunggah chunk $done dari $total...',
+            );
+            log('Chunk $done/$total terunggah');
+          } catch (e) {
+            failStreak++;
+            if (failStreak >= 3) rethrow;
+            log('Worker retry ($failStreak/3): $e');
+          }
         }
-
-        // Enkripsi dan SHA-256 chunk di isolate latar agar UI tidak freeze
-        final processed = await CryptoService.encryptAndHashChunkIsolate(
-          rawSlice,
-          key,
-          chunk.nonceHex,
-        );
-
-        await databaseService.updateChunkStatus(
-          chunk.id!,
-          'uploading',
-          sha256Chunk: processed.sha256,
-          ukuranChunk: processed.bytes.length,
-        );
-
-        final uploadResult = await telegramService.sendDocument(
-          processed.bytes,
-          '${processed.sha256}.bin',
-          cancelToken: cancelToken,
-        );
-
-        await databaseService.updateChunkStatus(
-          chunk.id!,
-          'done',
-          tgFileId: uploadResult.fileId,
-          tgMessageId: uploadResult.messageId,
-          sha256Chunk: processed.sha256,
-          ukuranChunk: processed.bytes.length,
-        );
-
-        completedCount++;
-        final done = alreadyDone + completedCount;
-        onProgress?.call(
-          0.30 + (done / total) * 0.70,
-          'Mengunggah chunk $done dari $total...',
-        );
-        log('Chunk $done/$total terunggah');
+      } finally {
+        await raf.close();
       }
     }
 
     await Future.wait(List.generate(poolSize, (_) => worker()));
-
     await databaseService.updateFileStatus(fileId, 'complete');
     log('Upload selesai: ${cloudFile.nama}');
     return (await databaseService.getFileById(fileId))!;

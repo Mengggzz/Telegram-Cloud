@@ -12,6 +12,10 @@ import 'package:tgcloud/services/foreground_service.dart';
 import 'package:tgcloud/services/manifest_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
+import 'dart:typed_data';
+import 'package:tgcloud/screens/preview_screen.dart';
+import 'package:tgcloud/services/crypto_service.dart';
+import 'package:tgcloud/services/permission_service.dart';
 import 'package:tgcloud/services/upload_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
 import 'package:tgcloud/widgets/file_card.dart';
@@ -44,6 +48,22 @@ class _HomeScreenState extends State<HomeScreen> {
   String _searchQuery = '';
   String _userPin = '123456'; // Default PIN sesi
   bool _dragging = false; // File sedang di-drag ke jendela (desktop)
+  final Map<int, Uint8List> _thumbCache = {};
+
+  Future<Uint8List?> _getThumb(CloudFile f) async {
+    if (f.id == null || f.thumbData == null || f.thumbNonce == null) return null;
+    if (_thumbCache.containsKey(f.id)) return _thumbCache[f.id];
+    try {
+      final enc = CryptoService.hexToBytes(f.thumbData!);
+      final key = CryptoService.deriveKey(_userPin, f.salt);
+      final raw = CryptoService.decryptChunk(enc, key, f.thumbNonce!);
+      final bytes = Uint8List.fromList(raw);
+      _thumbCache[f.id!] = bytes;
+      return bytes;
+    } catch (_) {
+      return null; // PIN salah / korup -> fallback ikon
+    }
+  }
 
   @override
   void initState() {
@@ -56,6 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await _loadFiles();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _offerResume();
+      PermissionService.requestNotificationOnce(widget.databaseService);
     });
   }
 
@@ -208,6 +229,97 @@ class _HomeScreenState extends State<HomeScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Gagal memulihkan index: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _quickImportTelegramConfig() async {
+    try {
+      final configService = TelegramConfigService();
+      final rawData = await configService.pickAndReadConfigFile();
+      if (rawData == null) return;
+
+      TelegramConfig importedConfig;
+      if (rawData['format'] == 'tgcloud-config' && rawData['is_encrypted'] == true) {
+        if (!mounted) return;
+        final controller = TextEditingController();
+        final pin = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppTheme.surface,
+            title: const Text('Buka Konfigurasi Terenkripsi', style: TextStyle(color: AppTheme.textPrimary)),
+            content: TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: 6,
+              autofocus: true,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: 'PIN Enkripsi',
+                labelStyle: TextStyle(color: AppTheme.primary),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+                child: const Text('Buka', style: TextStyle(color: Colors.black)),
+              ),
+            ],
+          ),
+        );
+        if (pin == null || pin.isEmpty) return;
+        importedConfig = TelegramConfigService.parseConfigEnvelope(rawData, pin: pin);
+      } else {
+        importedConfig = TelegramConfigService.parseConfigEnvelope(rawData);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Memvalidasi token bot...')),
+      );
+
+      final username = await configService.validateToken(importedConfig.botToken);
+      if (username == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Gagal: Token bot tidak valid atau tidak ada internet.'),
+              backgroundColor: AppTheme.danger,
+            ),
+          );
+        }
+        return;
+      }
+
+      await configService.save(importedConfig.botToken, importedConfig.chatId);
+      widget.telegramService.updateConfig(
+        botToken: importedConfig.botToken,
+        chatId: importedConfig.chatId,
+      );
+
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Telegram terhubung (@$username). Konfigurasi berhasil dipulihkan!'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengimpor: ${e.toString()}'),
             backgroundColor: AppTheme.danger,
           ),
         );
@@ -684,15 +796,26 @@ class _HomeScreenState extends State<HomeScreen> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppTheme.danger),
                   ),
-                  child: const Row(
+                  child: Row(
                     children: [
-                      Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
-                      SizedBox(width: 8),
-                      Expanded(
+                      const Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+                      const SizedBox(width: 8),
+                      const Expanded(
                         child: Text(
                           'Telegram belum dikonfigurasi. Ketuk untuk isi Bot Token & Chat ID.',
                           style: TextStyle(color: AppTheme.danger, fontSize: 13),
                         ),
+                      ),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          foregroundColor: AppTheme.primary,
+                        ),
+                        icon: const Icon(Icons.file_download_outlined, size: 16),
+                        label: const Text('Impor', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                        onPressed: _quickImportTelegramConfig,
                       ),
                     ],
                   ),
@@ -829,6 +952,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onDownload: () => _downloadFile(file),
                                 onDelete: () => _deleteFile(file),
                                 onResume: () => _resumePath(file),
+                                onPreview: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PreviewScreen(
+                                      file: file,
+                                      userPin: _userPin,
+                                      databaseService: widget.databaseService,
+                                      downloadService: widget.downloadService,
+                                    ),
+                                  ),
+                                ),
+                                thumbLoader: () => _getThumb(file),
                               );
                             },
                           ),

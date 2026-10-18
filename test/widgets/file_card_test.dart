@@ -65,4 +65,34 @@ void main() {
     await tester.tap(find.byIcon(Icons.play_arrow_rounded));
     expect(resumePressed, isTrue);
   });
+
+  testWidgets('FileCard renders preview button when onPreview provided for media', (tester) async {
+    bool previewPressed = false;
+    final file = CloudFile(
+      id: 3,
+      nama: 'photo.jpg',
+      ukuranBytes: 1024,
+      mime: 'image/jpeg',
+      sha256Original: 'hash3',
+      salt: 'salt3',
+      jumlahChunk: 1,
+      dibuatPada: '2026-10-18T10:00:00Z',
+      status: 'complete',
+    );
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FileCard(
+          file: file,
+          onDownload: () {},
+          onDelete: () {},
+          onPreview: () => previewPressed = true,
+        ),
+      ),
+    ));
+
+    expect(find.byIcon(Icons.visibility_outlined), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.visibility_outlined));
+    expect(previewPressed, isTrue);
+  });
 }
