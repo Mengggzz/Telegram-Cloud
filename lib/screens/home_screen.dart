@@ -7,6 +7,8 @@ import 'package:open_filex/open_filex.dart';
 import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/download_service.dart';
+import 'package:tgcloud/services/manifest_service.dart';
+import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/services/upload_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
@@ -80,6 +82,97 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$bytes B';
   }
 
+  Future<void> _autoSyncManifest([String? pinToUse]) async {
+    if (!widget.telegramService.isConfigured) return;
+    try {
+      final manifest = ManifestService(widget.databaseService);
+      await manifest.syncToTelegram(
+        pin: pinToUse ?? _userPin,
+        tg: widget.telegramService,
+        cfg: TelegramConfigService(),
+      );
+    } catch (e) {
+      debugPrint('Sync index gagal: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sinkron index gagal, coba manual'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _restoreFromTelegramDialog() async {
+    final controller = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Pulihkan Index dari Telegram', style: TextStyle(color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          maxLength: 6,
+          autofocus: true,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: const InputDecoration(
+            labelText: 'PIN Enkripsi',
+            labelStyle: TextStyle(color: AppTheme.primary),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Pulihkan', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+
+    if (pin == null || pin.isEmpty) return;
+
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mengunduh dan memulihkan index dari Telegram...')),
+        );
+      }
+      final manifest = ManifestService(widget.databaseService);
+      await manifest.restoreFromTelegram(
+        pin: pin,
+        tg: widget.telegramService,
+        cfg: TelegramConfigService(),
+      );
+      _userPin = pin;
+      await _loadFiles();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Index berhasil dipulihkan dari Telegram!'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memulihkan index: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _pickAndUpload() async {
     final pickedFile = await FilePicker.pickFile();
     if (pickedFile == null || pickedFile.path == null) return;
@@ -141,6 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       }
+      _autoSyncManifest();
     } catch (e) {
       if (mounted && Navigator.canPop(context)) {
         Navigator.pop(context);
@@ -257,6 +351,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       }
+      _autoSyncManifest();
     }
   }
 
@@ -289,7 +384,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     telegramService: widget.telegramService,
                     onPinChanged: (newPin) {
                       _userPin = newPin;
+                      _autoSyncManifest(newPin);
                     },
+                    onDatabaseRestored: _loadFiles,
                   ),
                 ),
               );
@@ -313,7 +410,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         telegramService: widget.telegramService,
                         onPinChanged: (newPin) {
                           _userPin = newPin;
+                          _autoSyncManifest(newPin);
                         },
+                        onDatabaseRestored: _loadFiles,
                       ),
                     ),
                   );
@@ -338,6 +437,33 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: TextStyle(color: AppTheme.danger, fontSize: 13),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            // Banner pulihkan saat daftar kosong (first-run)
+            if (_files.isEmpty && !_isLoading && widget.telegramService.isConfigured)
+              GestureDetector(
+                onTap: _restoreFromTelegramDialog,
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.primary),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.cloud_download_rounded, color: AppTheme.primary),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Baru install ulang? Pulihkan index dari Telegram',
+                          style: TextStyle(color: AppTheme.primary, fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      Icon(Icons.chevron_right_rounded, color: AppTheme.primary, size: 20),
                     ],
                   ),
                 ),

@@ -43,6 +43,7 @@ class TelegramStorageService {
     CancelToken? cancelToken,
     ProgressCallback? onSendProgress,
     int maxRetries = 3,
+    String? caption,
   }) async {
     int attempts = 0;
     while (true) {
@@ -51,6 +52,7 @@ class TelegramStorageService {
         final formData = FormData.fromMap({
           'chat_id': chatId,
           'document': MultipartFile.fromBytes(chunkBytes, filename: filename),
+          if (caption != null) 'caption': caption,
         });
 
         final response = await dio.post(
@@ -137,6 +139,41 @@ class TelegramStorageService {
       return response.data['ok'] == true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// GET info chat; dipakai untuk membaca pinned_message.
+  /// Return raw Map result dari Bot API.
+  Future<Map<String, dynamic>> getChat() async {
+    final response = await dio.post('getChat', data: {
+      'chat_id': chatId,
+    });
+    if (response.data['ok'] == true) {
+      return response.data['result'] as Map<String, dynamic>;
+    }
+    throw Exception('Telegram API error getChat: ${response.data['description']}');
+  }
+
+  /// Pin pesan manifest (notifikasi dimatikan).
+  Future<void> pinChatMessage(int messageId) async {
+    final response = await dio.post('pinChatMessage', data: {
+      'chat_id': chatId,
+      'message_id': messageId,
+      'disable_notification': true,
+    });
+    if (response.data['ok'] != true) {
+      throw Exception('Telegram API error pinChatMessage: ${response.data['description']}');
+    }
+  }
+
+  /// Lepas pin satu pesan (untuk membersihkan pin lama bila perlu).
+  Future<void> unpinChatMessage(int messageId) async {
+    final response = await dio.post('unpinChatMessage', data: {
+      'chat_id': chatId,
+      'message_id': messageId,
+    });
+    if (response.data['ok'] != true) {
+      throw Exception('Telegram API error unpinChatMessage: ${response.data['description']}');
     }
   }
 }

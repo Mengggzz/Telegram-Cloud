@@ -82,5 +82,118 @@ void main() {
       expect(result.fileId, equals('tg_chunk_file_id_999'));
       expect(result.messageId, equals(888));
     });
+
+    test('sendDocument includes caption when provided', () async {
+      String? capturedCaption;
+      mockDio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.path.contains('sendDocument')) {
+            final formData = options.data as FormData;
+            capturedCaption = formData.fields.firstWhere((e) => e.key == 'caption').value;
+            handler.resolve(Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: {
+                'ok': true,
+                'result': {
+                  'message_id': 889,
+                  'document': {'file_id': 'manifest_id_1'}
+                }
+              },
+            ));
+          } else {
+            handler.next(options);
+          }
+        },
+      ));
+
+      final result = await service.sendDocument(
+        [1, 2, 3],
+        'manifest.json',
+        caption: 'TGCloud-index-v1',
+      );
+      expect(result.fileId, equals('manifest_id_1'));
+      expect(capturedCaption, equals('TGCloud-index-v1'));
+    });
+
+    test('getChat returns result map', () async {
+      mockDio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.path.contains('getChat')) {
+            expect((options.data as Map)['chat_id'], equals('-100123456789'));
+            handler.resolve(Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: {
+                'ok': true,
+                'result': {
+                  'id': -100123456789,
+                  'title': 'Test Channel',
+                  'pinned_message': {
+                    'message_id': 777,
+                    'document': {'file_id': 'pinned_doc_123'},
+                  }
+                }
+              },
+            ));
+          } else {
+            handler.next(options);
+          }
+        },
+      ));
+
+      final chat = await service.getChat();
+      expect(chat['id'], equals(-100123456789));
+      expect(chat['pinned_message']['message_id'], equals(777));
+    });
+
+    test('pinChatMessage posts correct payload', () async {
+      bool called = false;
+      mockDio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.path.contains('pinChatMessage')) {
+            final data = options.data as Map;
+            expect(data['chat_id'], equals('-100123456789'));
+            expect(data['message_id'], equals(777));
+            expect(data['disable_notification'], isTrue);
+            called = true;
+            handler.resolve(Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: {'ok': true, 'result': true},
+            ));
+          } else {
+            handler.next(options);
+          }
+        },
+      ));
+
+      await service.pinChatMessage(777);
+      expect(called, isTrue);
+    });
+
+    test('unpinChatMessage posts correct payload', () async {
+      bool called = false;
+      mockDio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.path.contains('unpinChatMessage')) {
+            final data = options.data as Map;
+            expect(data['chat_id'], equals('-100123456789'));
+            expect(data['message_id'], equals(777));
+            called = true;
+            handler.resolve(Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: {'ok': true, 'result': true},
+            ));
+          } else {
+            handler.next(options);
+          }
+        },
+      ));
+
+      await service.unpinChatMessage(777);
+      expect(called, isTrue);
+    });
   });
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:tgcloud/services/database_service.dart';
+import 'package:tgcloud/services/manifest_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/theme/app_theme.dart';
@@ -9,12 +11,14 @@ class SettingsScreen extends StatefulWidget {
   final DatabaseService databaseService;
   final TelegramStorageService telegramService;
   final Function(String newPin)? onPinChanged;
+  final VoidCallback? onDatabaseRestored;
 
   const SettingsScreen({
     super.key,
     required this.databaseService,
     required this.telegramService,
     this.onPinChanged,
+    this.onDatabaseRestored,
   });
 
   @override
@@ -25,6 +29,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _wifiOnly = false;
   bool _autoBackup = false;
   String _lastBackupTime = '-';
+  String? _manifestSyncedAt;
+  late final ManifestService _manifestService = ManifestService(widget.databaseService);
 
   final _tokenController = TextEditingController();
   final _chatIdController = TextEditingController();
@@ -48,6 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final wifi = await widget.databaseService.getSetting('wifi_only');
     final auto = await widget.databaseService.getSetting('auto_backup_enabled');
     final lastTime = await widget.databaseService.getSetting('last_backup_time');
+    final manifestSynced = await widget.databaseService.getSetting('manifest_synced_at');
     final tgConfig = await TelegramConfigService().load();
 
     if (!mounted) return;
@@ -55,6 +62,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _wifiOnly = wifi == 'true';
       _autoBackup = auto == 'true';
       _lastBackupTime = lastTime ?? 'Belum pernah dicadangkan';
+      _manifestSyncedAt = manifestSynced;
       _tokenController.text = tgConfig.botToken;
       _chatIdController.text = tgConfig.chatId;
       _tgStatus = tgConfig.isConfigured
@@ -154,6 +162,264 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SnackBar(
             content: Text('PIN enkripsi berhasil diperbarui!'),
             backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<String?> _askPinDialog({required String title, required String actionLabel}) async {
+    final controller = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text(title, style: const TextStyle(color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          maxLength: 6,
+          autofocus: true,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: const InputDecoration(
+            labelText: 'PIN Enkripsi',
+            labelStyle: TextStyle(color: AppTheme.primary),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: Text(actionLabel, style: const TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+    return pin;
+  }
+
+  String _formatDate(String? iso) {
+    if (iso == null || iso.isEmpty) return 'Belum pernah';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return DateFormat('yyyy-MM-dd HH:mm').format(dt);
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  Future<void> _exportToFile() async {
+    final pin = await _askPinDialog(title: 'Ekspor Cadangan', actionLabel: 'Ekspor');
+    if (pin == null || pin.isEmpty) return;
+
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Menyiapkan file cadangan...')),
+        );
+      }
+      final file = await _manifestService.exportToFile(pin);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cadangan diekspor: ${file.path}'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengekspor: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _importFromFile() async {
+    final pin = await _askPinDialog(title: 'Impor Cadangan', actionLabel: 'Pilih File');
+    if (pin == null || pin.isEmpty) return;
+
+    try {
+      final data = await _manifestService.importFromFile(pin);
+      if (data == null) return;
+
+      if (!mounted) return;
+      final fileCount = data['files']?.length ?? 0;
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Konfirmasi Impor Cadangan', style: TextStyle(color: AppTheme.textPrimary)),
+          content: Text(
+            'Ganti seluruh daftar file lokal dengan cadangan ini? ($fileCount file ditemukan). Tindakan ini akan menimpa database lokal saat ini.',
+            style: const TextStyle(color: AppTheme.textMuted),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Ganti Database', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm == true) {
+        await _manifestService.replaceDatabase(data);
+        widget.onDatabaseRestored?.call();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Daftar file berhasil dipulihkan dari file cadangan!'),
+              backgroundColor: AppTheme.success,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal mengimpor: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _syncToTelegram() async {
+    if (!widget.telegramService.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Isi Bot Token dan Channel Chat ID dulu.'),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+      return;
+    }
+
+    final pin = await _askPinDialog(title: 'Sinkronkan Index ke Telegram', actionLabel: 'Sinkronkan');
+    if (pin == null || pin.isEmpty) return;
+
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mengunggah index manifest ke Telegram...')),
+        );
+      }
+      await _manifestService.syncToTelegram(
+        pin: pin,
+        tg: widget.telegramService,
+        cfg: TelegramConfigService(),
+      );
+      final syncedAt = await widget.databaseService.getSetting('manifest_synced_at');
+      if (mounted) {
+        setState(() {
+          _manifestSyncedAt = syncedAt;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Index manifest berhasil disinkronkan dan di-pin di channel!'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal sinkron: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _restoreFromTelegram() async {
+    if (!widget.telegramService.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Isi Bot Token dan Channel Chat ID dulu.'),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+      return;
+    }
+
+    final pin = await _askPinDialog(title: 'Pulihkan Index dari Telegram', actionLabel: 'Lanjut');
+    if (pin == null || pin.isEmpty) return;
+
+    if (!mounted) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Pulihkan Index Telegram', style: TextStyle(color: AppTheme.textPrimary)),
+        content: const Text(
+          'Ganti seluruh daftar file lokal dengan manifest yang ada di channel Telegram?',
+          style: TextStyle(color: AppTheme.textMuted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Pulihkan', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mengunduh dan memulihkan index dari Telegram...')),
+        );
+      }
+      await _manifestService.restoreFromTelegram(
+        pin: pin,
+        tg: widget.telegramService,
+        cfg: TelegramConfigService(),
+      );
+      widget.onDatabaseRestored?.call();
+      final syncedAt = await widget.databaseService.getSetting('manifest_synced_at');
+      if (mounted) {
+        setState(() {
+          _manifestSyncedAt = syncedAt;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Index berhasil dipulihkan dari Telegram!'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memulihkan index: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
           ),
         );
       }
@@ -261,7 +527,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
-          // Seksi Cadangan
+          // Seksi Cadangan Media Otomatis
           const Text('Cadangan Media Otomatis', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold, fontSize: 14)),
           const SizedBox(height: 8),
           SwitchListTile(
@@ -275,6 +541,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
               setState(() => _autoBackup = val);
               await widget.databaseService.setSetting('auto_backup_enabled', val.toString());
             },
+          ),
+          const SizedBox(height: 24),
+
+          // Seksi Cadangan & Pulihkan Metadata
+          const Text('Cadangan & Pulihkan Metadata', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.file_upload_outlined, color: AppTheme.primary),
+                  title: const Text('Ekspor ke File (*.tgcbak)', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('Simpan cadangan terenkripsi ke file lokal', style: TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _exportToFile,
+                ),
+                const Divider(height: 1, color: AppTheme.border),
+                ListTile(
+                  leading: const Icon(Icons.file_download_outlined, color: AppTheme.primary),
+                  title: const Text('Impor dari File (*.tgcbak)', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('Pulihkan daftar file dari cadangan lokal', style: TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _importFromFile,
+                ),
+                const Divider(height: 1, color: AppTheme.border),
+                ListTile(
+                  leading: const Icon(Icons.cloud_upload_outlined, color: AppTheme.primary),
+                  title: const Text('Sinkronkan Index ke Telegram', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: Text('Upload manifest terenkripsi ke channel\nTerakhir: ${_formatDate(_manifestSyncedAt)}', style: const TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _syncToTelegram,
+                ),
+                const Divider(height: 1, color: AppTheme.border),
+                ListTile(
+                  leading: const Icon(Icons.cloud_download_outlined, color: AppTheme.primary),
+                  title: const Text('Pulihkan Index dari Telegram', style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('Ambil index dari pesan ter-pin di channel', style: TextStyle(color: AppTheme.textMuted)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                  onTap: _restoreFromTelegram,
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
 

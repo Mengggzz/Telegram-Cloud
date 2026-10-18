@@ -8,6 +8,13 @@ class DatabaseService {
   final bool inMemory;
   Database? _db;
 
+  Database get db {
+    if (_db == null) {
+      throw StateError('Database belum diinisialisasi. Panggil init() terlebih dahulu.');
+    }
+    return _db!;
+  }
+
   DatabaseService({this.inMemory = false});
 
   Future<void> init() async {
