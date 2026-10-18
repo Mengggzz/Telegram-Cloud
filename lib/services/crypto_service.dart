@@ -12,6 +12,13 @@ Future<String> _hashFileBackground(String filePath) async {
   return digest.toString();
 }
 
+Uint8List _encryptChunkBackground(List<dynamic> args) {
+  final chunkBytes = args[0] as List<int>;
+  final keyBytes = args[1] as List<int>;
+  final nonceHex = args[2] as String;
+  return Uint8List.fromList(CryptoService.encryptChunk(chunkBytes, keyBytes, nonceHex));
+}
+
 class CryptoService {
   static final Random _secureRandom = Random.secure();
 
@@ -69,5 +76,15 @@ class CryptoService {
   /// (Menggantikan pola readAsBytes + calculateSha256 untuk file besar.)
   static Future<String> calculateFileSha256(String filePath) {
     return compute(_hashFileBackground, filePath);
+  }
+
+  /// Enkripsi chunk di isolate latar agar UI tidak freeze.
+  static Future<enc.Encrypted> encryptChunkIsolate(
+    List<int> chunkBytes,
+    List<int> keyBytes,
+    String nonceHex,
+  ) async {
+    final bytes = await compute(_encryptChunkBackground, [chunkBytes, keyBytes, nonceHex]);
+    return enc.Encrypted(bytes);
   }
 }

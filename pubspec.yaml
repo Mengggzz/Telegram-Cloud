@@ -46,6 +46,7 @@ dependencies:
   intl: ^0.19.0
   flutter_foreground_task: ^11.0.3
   share_plus: ^13.3.1
+  wakelock_plus: ^1.2.0
 
 dev_dependencies:
   flutter_test:

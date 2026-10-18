@@ -4,6 +4,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:tgcloud/screens/home_screen.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/download_service.dart';
+import 'package:tgcloud/services/foreground_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
 import 'package:tgcloud/services/upload_service.dart';
@@ -38,6 +39,8 @@ void main() async {
     databaseService: databaseService,
     telegramService: telegramService,
   );
+
+  ForegroundServiceManager.init();
 
   runApp(TGCloudApp(
     databaseService: databaseService,

@@ -1,4 +1,5 @@
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
@@ -7,6 +8,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:tgcloud/models/cloud_file.dart';
 import 'package:tgcloud/services/database_service.dart';
 import 'package:tgcloud/services/download_service.dart';
+import 'package:tgcloud/services/foreground_service.dart';
 import 'package:tgcloud/services/manifest_service.dart';
 import 'package:tgcloud/services/telegram_config_service.dart';
 import 'package:tgcloud/services/telegram_storage_service.dart';
@@ -16,6 +18,7 @@ import 'package:tgcloud/widgets/file_card.dart';
 import 'package:tgcloud/widgets/adaptive.dart';
 import 'package:tgcloud/screens/upload_progress_sheet.dart';
 import 'package:tgcloud/screens/settings_screen.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class HomeScreen extends StatefulWidget {
   final DatabaseService databaseService;
@@ -51,6 +54,42 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initData() async {
     await _checkInitialPin();
     await _loadFiles();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _offerResume();
+    });
+  }
+
+  Future<void> _offerResume() async {
+    final files = await widget.databaseService.getAllFiles();
+    final pending = files.where((f) => f.status == 'uploading').toList();
+    if (pending.isEmpty || !mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Upload Belum Selesai',
+            style: TextStyle(color: AppTheme.textPrimary)),
+        content: Text('${pending.length} file belum selesai diupload. Lanjutkan sekarang?',
+            style: const TextStyle(color: AppTheme.textMuted)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Nanti', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Lanjutkan', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+    if (go == true) {
+      for (final f in pending) {
+        if (!mounted) return;
+        await _resumePath(f);
+      }
+    }
   }
 
   Future<void> _checkInitialPin() async {
@@ -193,6 +232,9 @@ class _HomeScreenState extends State<HomeScreen> {
     double progress = 0.0;
     String status = 'Menyiapkan...';
     StateSetter? sheetSetState;
+    final cancelToken = CancelToken();
+    int? activeFileId;
+    int lastFgPct = -1;
 
     if (!mounted) return;
     // Desktop: dialog terpusat. Mobile: bottom sheet (lihat UploadProgressSheet.show).
@@ -204,21 +246,77 @@ class _HomeScreenState extends State<HomeScreen> {
           filename: filename,
           progress: progress,
           statusText: status,
-          onCancel: () {
-            Navigator.pop(ctx);
+          onCancel: () async {
+            cancelToken.cancel();
+            final choice = await showDialog<String>(
+              context: context,
+              builder: (dCtx) => AlertDialog(
+                backgroundColor: AppTheme.surface,
+                title: const Text('Batalkan Unggahan',
+                    style: TextStyle(color: AppTheme.textPrimary)),
+                content: const Text(
+                  'Jeda untuk dilanjutkan nanti, atau hapus progres upload ini?',
+                  style: TextStyle(color: AppTheme.textMuted)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dCtx, 'resume'),
+                    child: const Text('Jeda',
+                        style: TextStyle(color: AppTheme.primary)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dCtx, 'delete'),
+                    child: const Text('Hapus',
+                        style: TextStyle(color: AppTheme.danger)),
+                  ),
+                ],
+              ),
+            );
+            if (choice == 'delete' && activeFileId != null) {
+              await widget.uploadService.cancelUpload(activeFileId!);
+            }
+            if (ctx.mounted && Navigator.canPop(ctx)) Navigator.pop(ctx);
+            _loadFiles();
           },
         );
       },
     );
 
+    bool fgStarted = false;
+    try {
+      fgStarted = await ForegroundServiceManager.start(
+        title: 'TGCloud',
+        text: 'Mengupload $filename...',
+      );
+    } catch (_) {
+      fgStarted = false;
+    }
+
+    bool wakelockOn = false;
+    try {
+      await WakelockPlus.enable();
+      wakelockOn = true;
+    } catch (_) {}
+
     try {
       await widget.uploadService.uploadFile(
         path,
         _userPin,
+        cancelToken: cancelToken,
+        onFileIdCreated: (id) => activeFileId = id,
         onProgress: (p, s) {
           progress = p;
           status = s;
           sheetSetState?.call(() {});
+          final pct = (p * 100).toInt();
+          if (fgStarted && pct % 5 == 0 && pct != lastFgPct) {
+            lastFgPct = pct;
+            try {
+              ForegroundServiceManager.update(
+                title: 'TGCloud',
+                text: '$s • $pct%',
+              );
+            } catch (_) {}
+          }
         },
       );
 
@@ -246,6 +344,148 @@ class _HomeScreenState extends State<HomeScreen> {
             backgroundColor: AppTheme.danger,
           ),
         );
+      }
+    } finally {
+      if (wakelockOn) {
+        try {
+          await WakelockPlus.disable();
+        } catch (_) {}
+      }
+      if (fgStarted) {
+        try {
+          await ForegroundServiceManager.stop();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _resumePath(CloudFile file) async {
+    final filename = file.nama;
+    double progress = 0.0;
+    String status = 'Menyiapkan...';
+    StateSetter? sheetSetState;
+    final cancelToken = CancelToken();
+    int? activeFileId = file.id;
+    int lastFgPct = -1;
+
+    if (!mounted) return;
+    UploadProgressSheet.show(
+      context: context,
+      builder: (ctx, setModalState) {
+        sheetSetState = setModalState;
+        return UploadProgressSheet(
+          filename: filename,
+          progress: progress,
+          statusText: status,
+          onCancel: () async {
+            cancelToken.cancel();
+            final choice = await showDialog<String>(
+              context: context,
+              builder: (dCtx) => AlertDialog(
+                backgroundColor: AppTheme.surface,
+                title: const Text('Batalkan Unggahan',
+                    style: TextStyle(color: AppTheme.textPrimary)),
+                content: const Text(
+                  'Jeda untuk dilanjutkan nanti, atau hapus progres upload ini?',
+                  style: TextStyle(color: AppTheme.textMuted)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dCtx, 'resume'),
+                    child: const Text('Jeda',
+                        style: TextStyle(color: AppTheme.primary)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dCtx, 'delete'),
+                    child: const Text('Hapus',
+                        style: TextStyle(color: AppTheme.danger)),
+                  ),
+                ],
+              ),
+            );
+            if (choice == 'delete' && activeFileId != null) {
+              await widget.uploadService.cancelUpload(activeFileId!);
+            }
+            if (ctx.mounted && Navigator.canPop(ctx)) Navigator.pop(ctx);
+            _loadFiles();
+          },
+        );
+      },
+    );
+
+    bool fgStarted = false;
+    try {
+      fgStarted = await ForegroundServiceManager.start(
+        title: 'TGCloud',
+        text: 'Melanjutkan upload $filename...',
+      );
+    } catch (_) {
+      fgStarted = false;
+    }
+
+    bool wakelockOn = false;
+    try {
+      await WakelockPlus.enable();
+      wakelockOn = true;
+    } catch (_) {}
+
+    try {
+      await widget.uploadService.resumeUpload(
+        file.id!,
+        _userPin,
+        cancelToken: cancelToken,
+        onFileIdCreated: (id) => activeFileId = id,
+        onProgress: (p, s) {
+          progress = p;
+          status = s;
+          sheetSetState?.call(() {});
+          final pct = (p * 100).toInt();
+          if (fgStarted && pct % 5 == 0 && pct != lastFgPct) {
+            lastFgPct = pct;
+            try {
+              ForegroundServiceManager.update(
+                title: 'TGCloud',
+                text: '$s • $pct%',
+              );
+            } catch (_) {}
+          }
+        },
+      );
+
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      _loadFiles();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload $filename dilanjutkan & selesai!'),
+            backgroundColor: AppTheme.success,
+          ),
+        );
+      }
+      _autoSyncManifest();
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal melanjutkan: ${e.toString()}'),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    } finally {
+      if (wakelockOn) {
+        try {
+          await WakelockPlus.disable();
+        } catch (_) {}
+      }
+      if (fgStarted) {
+        try {
+          await ForegroundServiceManager.stop();
+        } catch (_) {}
       }
     }
   }
@@ -571,6 +811,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 file: file,
                                 onDownload: () => _downloadFile(file),
                                 onDelete: () => _deleteFile(file),
+                                onResume: () => _resumePath(file),
                               );
                             },
                           ),

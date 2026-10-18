@@ -6,12 +6,14 @@ class FileCard extends StatelessWidget {
   final CloudFile file;
   final VoidCallback onDownload;
   final VoidCallback onDelete;
+  final VoidCallback? onResume;
 
   const FileCard({
     super.key,
     required this.file,
     required this.onDownload,
     required this.onDelete,
+    this.onResume,
   });
 
   String _formatSize(int bytes) {
@@ -73,10 +75,17 @@ class FileCard extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.download_rounded, color: AppTheme.primary),
-            onPressed: onDownload,
-          ),
+          if (file.status != 'complete')
+            IconButton(
+              icon: const Icon(Icons.play_arrow_rounded, color: AppTheme.primary),
+              tooltip: 'Lanjutkan Upload',
+              onPressed: onResume,
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.download_rounded, color: AppTheme.primary),
+              onPressed: onDownload,
+            ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted),
             onPressed: onDelete,

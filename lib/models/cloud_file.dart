@@ -9,6 +9,7 @@ class CloudFile {
   final int jumlahChunk;
   final String dibuatPada;
   final String status;
+  final String? sumberPath;
 
   CloudFile({
     this.id,
@@ -21,6 +22,7 @@ class CloudFile {
     required this.jumlahChunk,
     required this.dibuatPada,
     required this.status,
+    this.sumberPath,
   });
 
   Map<String, dynamic> toMap() => {
@@ -34,6 +36,7 @@ class CloudFile {
         'jumlah_chunk': jumlahChunk,
         'dibuat_pada': dibuatPada,
         'status': status,
+        'sumber_path': sumberPath,
       };
 
   factory CloudFile.fromMap(Map<String, dynamic> map) => CloudFile(
@@ -47,5 +50,6 @@ class CloudFile {
         jumlahChunk: map['jumlah_chunk'] as int,
         dibuatPada: map['dibuat_pada'] as String,
         status: map['status'] as String,
+        sumberPath: map['sumber_path'] as String?,
       );
 }

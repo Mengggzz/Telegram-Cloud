@@ -27,8 +27,9 @@ class DatabaseService {
     if (inMemory) {
       _db = await openDatabase(
         inMemoryDatabasePath,
-        version: 1,
+        version: 2,
         onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
         onConfigure: _onConfigure,
       );
     } else {
@@ -36,8 +37,9 @@ class DatabaseService {
       final path = join(dbPath, 'tgcloud.db');
       _db = await openDatabase(
         path,
-        version: 1,
+        version: 2,
         onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
         onConfigure: _onConfigure,
       );
     }
@@ -45,6 +47,12 @@ class DatabaseService {
 
   Future<void> _onConfigure(Database db) async {
     await db.execute('PRAGMA foreign_keys = ON');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE cloud_files ADD COLUMN sumber_path TEXT');
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -59,7 +67,8 @@ class DatabaseService {
         salt TEXT NOT NULL,
         jumlah_chunk INTEGER NOT NULL,
         dibuat_pada TEXT NOT NULL,
-        status TEXT NOT NULL
+        status TEXT NOT NULL,
+        sumber_path TEXT
       )
     ''');
 

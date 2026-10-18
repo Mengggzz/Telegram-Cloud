@@ -84,5 +84,23 @@ void main() {
       final val = await dbService.getSetting('wifi_only');
       expect(val, equals('true'));
     });
+
+    test('insertFile stores and retrieves sumber_path', () async {
+      final file = CloudFile(
+        nama: 'photo.jpg',
+        ukuranBytes: 1234,
+        mime: 'image/jpeg',
+        sha256Original: 'hashphoto',
+        salt: 'saltphoto',
+        jumlahChunk: 1,
+        dibuatPada: DateTime.now().toIso8601String(),
+        status: 'uploading',
+        sumberPath: '/path/to/photo.jpg',
+      );
+
+      final fileId = await dbService.insertFile(file);
+      final retrieved = await dbService.getFileById(fileId);
+      expect(retrieved?.sumberPath, equals('/path/to/photo.jpg'));
+    });
   });
 }

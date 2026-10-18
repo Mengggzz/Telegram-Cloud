@@ -44,5 +44,19 @@ void main() {
       final hash = CryptoService.calculateSha256(data);
       expect(hash.length, equals(64));
     });
+
+    test('encryptChunkIsolate encrypts in isolate and decrypts correctly', () async {
+      final salt = CryptoService.generateSalt();
+      final key = CryptoService.deriveKey(pin, salt);
+      final nonce = CryptoService.generateNonce();
+      final original = utf8.encode('Testing encryptChunkIsolate in isolate!');
+
+      final enc = await CryptoService.encryptChunkIsolate(original, key, nonce);
+      expect(enc.bytes, isNot(equals(original)));
+      expect(enc.bytes.length, equals(original.length + 16));
+
+      final decrypted = CryptoService.decryptChunk(enc.bytes, key, nonce);
+      expect(decrypted, equals(original));
+    });
   });
 }
