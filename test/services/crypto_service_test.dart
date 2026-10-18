@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tgcloud/services/crypto_service.dart';
 
@@ -95,6 +96,45 @@ void main() {
         ),
         throwsA(isA<Exception>()),
       );
+    });
+
+    test('calculateFileSha256Progress streams progress and calculates valid hash', () async {
+      final tmp = await Directory.systemTemp.createTemp('tgcloud_test_');
+      try {
+        final testFile = File('${tmp.path}/test_stream.bin');
+        final testData = List<int>.generate(1024 * 50, (i) => i % 256);
+        await testFile.writeAsBytes(testData);
+
+        String? finalHash;
+        int lastBytes = 0;
+        await for (final p in CryptoService.calculateFileSha256Progress(testFile.path)) {
+          expect(p.totalBytes, equals(testData.length));
+          expect(p.bytesRead, greaterThanOrEqualTo(lastBytes));
+          lastBytes = p.bytesRead;
+          if (p.hash != null) {
+            finalHash = p.hash;
+          }
+        }
+
+        expect(finalHash, isNotNull);
+        expect(finalHash, equals(CryptoService.calculateSha256(testData)));
+      } finally {
+        await tmp.delete(recursive: true);
+      }
+    });
+
+    test('calculateFileSha256 returns matching hash', () async {
+      final tmp = await Directory.systemTemp.createTemp('tgcloud_test_');
+      try {
+        final testFile = File('${tmp.path}/test_compat.bin');
+        final testData = utf8.encode('Compatibility test string');
+        await testFile.writeAsBytes(testData);
+
+        final hash = await CryptoService.calculateFileSha256(testFile.path);
+        expect(hash, equals(CryptoService.calculateSha256(testData)));
+      } finally {
+        await tmp.delete(recursive: true);
+      }
     });
   });
 }

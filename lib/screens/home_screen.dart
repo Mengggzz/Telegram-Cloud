@@ -234,6 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _uploadPath(String path, String filename) async {
     double progress = 0.0;
     String status = 'Menyiapkan...';
+    final logs = <String>[];
     StateSetter? sheetSetState;
     final cancelToken = CancelToken();
     int? activeFileId;
@@ -249,6 +250,7 @@ class _HomeScreenState extends State<HomeScreen> {
           filename: filename,
           progress: progress,
           statusText: status,
+          logs: logs,
           onCancel: () async {
             cancelToken.cancel();
             final choice = await showDialog<String>(
@@ -306,6 +308,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _userPin,
         cancelToken: cancelToken,
         onFileIdCreated: (id) => activeFileId = id,
+        onLog: (msg) {
+          logs.add(msg);
+          if (logs.length > 50) logs.removeAt(0);
+          sheetSetState?.call(() {});
+        },
         onProgress: (p, s) {
           progress = p;
           status = s;
@@ -366,6 +373,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final filename = file.nama;
     double progress = 0.0;
     String status = 'Menyiapkan...';
+    final logs = <String>[];
     StateSetter? sheetSetState;
     final cancelToken = CancelToken();
     int? activeFileId = file.id;
@@ -380,6 +388,7 @@ class _HomeScreenState extends State<HomeScreen> {
           filename: filename,
           progress: progress,
           statusText: status,
+          logs: logs,
           onCancel: () async {
             cancelToken.cancel();
             final choice = await showDialog<String>(
@@ -437,6 +446,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _userPin,
         cancelToken: cancelToken,
         onFileIdCreated: (id) => activeFileId = id,
+        onLog: (msg) {
+          logs.add(msg);
+          if (logs.length > 50) logs.removeAt(0);
+          sheetSetState?.call(() {});
+        },
         onProgress: (p, s) {
           progress = p;
           status = s;

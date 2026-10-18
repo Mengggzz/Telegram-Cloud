@@ -1,15 +1,64 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:flutter/foundation.dart';
 
-/// Dijalankan di isolate latar via compute(): baca file secara streaming
-/// (memori konstan) lalu kembalikan hex digest SHA-256.
-/// Harus fungsi top-level agar bisa dikirim ke isolate.
-Future<String> _hashFileBackground(String filePath) async {
-  final digest = await sha256.bind(File(filePath).openRead()).first;
-  return digest.toString();
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
+}
+
+Future<void> _hashFileStreamWorker(List<dynamic> args) async {
+  final filePath = args[0] as String;
+  final sendPort = args[1] as SendPort;
+  final totalBytes = args[2] as int;
+
+  try {
+    final file = File(filePath);
+    final sink = _DigestSink();
+    final input = sha256.startChunkedConversion(sink);
+
+    int bytesRead = 0;
+    int lastReported = 0;
+    final reportInterval = max(1024 * 1024, totalBytes ~/ 100);
+
+    await for (final chunk in file.openRead()) {
+      input.add(chunk);
+      bytesRead += chunk.length;
+
+      if (bytesRead - lastReported >= reportInterval || bytesRead >= totalBytes) {
+        lastReported = bytesRead;
+        sendPort.send([bytesRead, totalBytes]);
+      }
+    }
+
+    input.close();
+    final hashHex = sink.value?.toString() ?? '';
+    sendPort.send([bytesRead, totalBytes, hashHex]);
+  } catch (e) {
+    sendPort.send('ERROR:$e');
+  }
+}
+
+class HashProgress {
+  final int bytesRead;
+  final int totalBytes;
+  final String? hash;
+
+  double get fraction => totalBytes > 0 ? (bytesRead / totalBytes).clamp(0.0, 1.0) : 0.0;
+  int get percentage => (fraction * 100).toInt();
+
+  HashProgress({
+    required this.bytesRead,
+    required this.totalBytes,
+    this.hash,
+  });
 }
 
 Uint8List _encryptChunkBackground(List<dynamic> args) {
@@ -98,12 +147,44 @@ class CryptoService {
     return sha256.convert(bytes).toString();
   }
 
+  /// Hitung SHA-256 sebuah file langsung dari disk dengan streaming progress.
+  /// Dijalankan di isolate latar agar UI tidak freeze dan memori konstan.
+  static Stream<HashProgress> calculateFileSha256Progress(String filePath) async* {
+    final file = File(filePath);
+    final totalBytes = await file.length();
+    if (totalBytes == 0) {
+      yield HashProgress(bytesRead: 0, totalBytes: 0, hash: sha256.convert([]).toString());
+      return;
+    }
+
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(_hashFileStreamWorker, [filePath, receivePort.sendPort, totalBytes]);
+
+    try {
+      await for (final msg in receivePort) {
+        if (msg is List) {
+          final bytesRead = msg[0] as int;
+          final total = msg[1] as int;
+          final hash = msg.length > 2 ? msg[2] as String? : null;
+          yield HashProgress(bytesRead: bytesRead, totalBytes: total, hash: hash);
+          if (hash != null) break;
+        } else if (msg is String && msg.startsWith('ERROR:')) {
+          throw Exception(msg.substring(6));
+        }
+      }
+    } finally {
+      receivePort.close();
+      isolate.kill(priority: Isolate.immediate);
+    }
+  }
+
   /// Hitung SHA-256 sebuah file langsung dari disk.
-  /// Dijalankan di isolate latar + streaming, sehingga UI tidak freeze
-  /// dan memori tetap kecil walau file ratusan MB/GB.
-  /// (Menggantikan pola readAsBytes + calculateSha256 untuk file besar.)
-  static Future<String> calculateFileSha256(String filePath) {
-    return compute(_hashFileBackground, filePath);
+  /// Dijalankan di isolate latar + streaming.
+  static Future<String> calculateFileSha256(String filePath) async {
+    await for (final p in calculateFileSha256Progress(filePath)) {
+      if (p.hash != null) return p.hash!;
+    }
+    throw Exception('Gagal menghitung hash file: $filePath');
   }
 
   /// Enkripsi chunk di isolate latar agar UI tidak freeze.

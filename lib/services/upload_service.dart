@@ -31,6 +31,12 @@ class UploadService {
     UploadLogCallback? onLog,
     void Function(int fileId)? onFileIdCreated,
   }) async {
+    void log(String msg) {
+      final t = DateTime.now().toLocal();
+      String two(int n) => n.toString().padLeft(2, '0');
+      onLog?.call('[${two(t.hour)}:${two(t.minute)}:${two(t.second)}] $msg');
+    }
+
     final file = File(filePath);
     if (!await file.exists()) {
       throw Exception('File tidak ditemukan: $filePath');
@@ -42,17 +48,40 @@ class UploadService {
     final chunkSize = chunkSizeBytes ?? AppConfig.chunkSizeBytes;
     final totalChunks = max(1, (fileSize / chunkSize).ceil());
 
-    onProgress?.call(0.01, 'Menghitung hash file...');
+    log('File dipilih: $filename (${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB)');
+    log('Mulai menghitung hash SHA-256...');
 
-    // SHA-256 dihitung di isolate latar (streaming dari disk) agar UI
-    // tidak freeze untuk file besar. Lihat CryptoService.calculateFileSha256.
-    final sha256Original = await CryptoService.calculateFileSha256(filePath);
+    String sha256Original = '';
+    final hashStartTime = DateTime.now();
+    await for (final p in CryptoService.calculateFileSha256Progress(filePath)) {
+      if (cancelToken?.isCancelled == true) {
+        log('Upload dibatalkan saat menghitung hash');
+        throw Exception('Upload dibatalkan');
+      }
+
+      final mbRead = (p.bytesRead / (1024 * 1024)).toStringAsFixed(1);
+      final mbTotal = (p.totalBytes / (1024 * 1024)).toStringAsFixed(1);
+      final pct = p.percentage;
+
+      final currentProgress = p.fraction * 0.05;
+      final statusMsg = 'Menghitung hash... ($mbRead / $mbTotal MB • $pct%)';
+      onProgress?.call(currentProgress, statusMsg);
+
+      if (p.hash != null) {
+        sha256Original = p.hash!;
+        final dur = DateTime.now().difference(hashStartTime).inMilliseconds / 1000.0;
+        log('SHA-256 (${dur.toStringAsFixed(1)}s): $sha256Original');
+      }
+    }
 
     // Cek deduplikasi
+    log('Memeriksa duplikasi hash di database...');
     final existing = await databaseService.getFileByHash(sha256Original);
     if (existing != null) {
+      log('File identik sudah ada di cloud: ${existing.nama}');
       throw Exception('File identik sudah ada di cloud: ${existing.nama}');
     }
+    log('File unik. Menyiapkan $totalChunks chunk enkripsi (AES-GCM)...');
 
     // Hindari nama duplikat persis
     final allFiles = await databaseService.getAllFiles();
@@ -198,11 +227,13 @@ class UploadService {
 
         completedCount++;
         uploadedBytes += processed.bytes.length;
-        final progress = completedCount / totalChunks;
+        final progress = 0.05 + (completedCount / totalChunks) * 0.95;
+        final speedStr = currentSpeedMbps();
         onProgress?.call(
           progress,
-          'Mengunggah chunk $completedCount dari $totalChunks \u2022 ${currentSpeedMbps()}',
+          'Mengunggah chunk $completedCount dari $totalChunks \u2022 $speedStr',
         );
+        log('Chunk $completedCount/$totalChunks selesai diunggah ($speedStr)');
       }
     }
 
@@ -210,6 +241,7 @@ class UploadService {
     await Future.wait(workers);
 
     await databaseService.updateFileStatus(fileId, 'complete');
+    log('Upload $filename berhasil diselesaikan 100%!');
     return (await databaseService.getFileById(fileId))!;
   }
 
