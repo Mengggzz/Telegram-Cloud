@@ -64,17 +64,12 @@ class DownloadService {
           cancelToken: cancelToken,
         );
 
-        // Verifikasi integritas chunk terenkripsi
-        final downloadedHash = CryptoService.calculateSha256(encryptedBytes);
-        if (downloadedHash != chunk.sha256Chunk) {
-          throw Exception('Integritas chunk ${chunk.chunkIndex} rusak! Hash tidak cocok.');
-        }
-
-        // Dekripsi chunk
-        final decryptedBytes = CryptoService.decryptChunk(
+        // Verifikasi integritas chunk dan dekripsi di isolate latar agar UI tidak freeze
+        final decryptedBytes = await CryptoService.verifyAndDecryptChunkIsolate(
           encryptedBytes,
           key,
           chunk.nonceHex,
+          chunk.sha256Chunk,
         );
 
         await raf.writeFrom(decryptedBytes);

@@ -19,6 +19,34 @@ Uint8List _encryptChunkBackground(List<dynamic> args) {
   return Uint8List.fromList(CryptoService.encryptChunk(chunkBytes, keyBytes, nonceHex));
 }
 
+class ChunkProcessResult {
+  final Uint8List bytes;
+  final String sha256;
+  ChunkProcessResult({required this.bytes, required this.sha256});
+}
+
+ChunkProcessResult _encryptAndHashChunkBackground(List<dynamic> args) {
+  final chunkBytes = args[0] as List<int>;
+  final keyBytes = args[1] as List<int>;
+  final nonceHex = args[2] as String;
+  final encryptedBytes = Uint8List.fromList(CryptoService.encryptChunk(chunkBytes, keyBytes, nonceHex));
+  final hash = CryptoService.calculateSha256(encryptedBytes);
+  return ChunkProcessResult(bytes: encryptedBytes, sha256: hash);
+}
+
+List<int> _verifyAndDecryptChunkBackground(List<dynamic> args) {
+  final encryptedBytes = args[0] as List<int>;
+  final keyBytes = args[1] as List<int>;
+  final nonceHex = args[2] as String;
+  final expectedHash = args[3] as String;
+
+  final actualHash = CryptoService.calculateSha256(encryptedBytes);
+  if (actualHash != expectedHash) {
+    throw Exception('Integritas chunk rusak! Hash tidak cocok.');
+  }
+  return CryptoService.decryptChunk(encryptedBytes, keyBytes, nonceHex);
+}
+
 class CryptoService {
   static final Random _secureRandom = Random.secure();
 
@@ -86,5 +114,29 @@ class CryptoService {
   ) async {
     final bytes = await compute(_encryptChunkBackground, [chunkBytes, keyBytes, nonceHex]);
     return enc.Encrypted(bytes);
+  }
+
+  /// Enkripsi chunk sekaligus hitung SHA-256 di isolate latar agar UI tidak freeze.
+  static Future<ChunkProcessResult> encryptAndHashChunkIsolate(
+    List<int> chunkBytes,
+    List<int> keyBytes,
+    String nonceHex,
+  ) {
+    return compute(_encryptAndHashChunkBackground, [chunkBytes, keyBytes, nonceHex]);
+  }
+
+  /// Verifikasi integritas hash dan dekripsi chunk di isolate latar.
+  static Future<List<int>> verifyAndDecryptChunkIsolate(
+    List<int> encryptedBytes,
+    List<int> keyBytes,
+    String nonceHex,
+    String expectedHash,
+  ) {
+    return compute(_verifyAndDecryptChunkBackground, [
+      encryptedBytes,
+      keyBytes,
+      nonceHex,
+      expectedHash,
+    ]);
   }
 }

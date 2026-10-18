@@ -148,10 +148,19 @@ class DatabaseService {
     await _db!.update('cloud_files', {'status': status}, where: 'id = ?', whereArgs: [fileId]);
   }
 
-  Future<void> updateChunkStatus(int chunkId, String status, {String? tgFileId, int? tgMessageId}) async {
+  Future<void> updateChunkStatus(
+    int chunkId,
+    String status, {
+    String? tgFileId,
+    int? tgMessageId,
+    String? sha256Chunk,
+    int? ukuranChunk,
+  }) async {
     final values = <String, dynamic>{'status': status};
     if (tgFileId != null) values['tg_file_id'] = tgFileId;
     if (tgMessageId != null) values['tg_message_id'] = tgMessageId;
+    if (sha256Chunk != null) values['sha256_chunk'] = sha256Chunk;
+    if (ukuranChunk != null) values['ukuran_chunk'] = ukuranChunk;
     await _db!.update('cloud_chunks', values, where: 'id = ?', whereArgs: [chunkId]);
   }
 

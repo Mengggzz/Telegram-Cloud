@@ -60,36 +60,39 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _offerResume() async {
-    final files = await widget.databaseService.getAllFiles();
-    final pending = files.where((f) => f.status == 'uploading').toList();
-    if (pending.isEmpty || !mounted) return;
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('Upload Belum Selesai',
-            style: TextStyle(color: AppTheme.textPrimary)),
-        content: Text('${pending.length} file belum selesai diupload. Lanjutkan sekarang?',
-            style: const TextStyle(color: AppTheme.textMuted)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Nanti', style: TextStyle(color: AppTheme.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Lanjutkan', style: TextStyle(color: Colors.black)),
-          ),
-        ],
-      ),
-    );
-    if (go == true) {
-      for (final f in pending) {
-        if (!mounted) return;
-        await _resumePath(f);
+    if (!mounted) return;
+    try {
+      final files = await widget.databaseService.getAllFiles();
+      final pending = files.where((f) => f.status == 'uploading').toList();
+      if (pending.isEmpty || !mounted) return;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Upload Belum Selesai',
+              style: TextStyle(color: AppTheme.textPrimary)),
+          content: Text('${pending.length} file belum selesai diupload. Lanjutkan sekarang?',
+              style: const TextStyle(color: AppTheme.textMuted)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Nanti', style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Lanjutkan', style: TextStyle(color: Colors.black)),
+            ),
+          ],
+        ),
+      );
+      if (go == true) {
+        for (final f in pending) {
+          if (!mounted) return;
+          await _resumePath(f);
+        }
       }
-    }
+    } catch (_) {}
   }
 
   Future<void> _checkInitialPin() async {

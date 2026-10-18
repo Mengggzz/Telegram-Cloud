@@ -58,5 +58,43 @@ void main() {
       final decrypted = CryptoService.decryptChunk(enc.bytes, key, nonce);
       expect(decrypted, equals(original));
     });
+
+    test('encryptAndHashChunkIsolate and verifyAndDecryptChunkIsolate work together in isolate', () async {
+      final salt = CryptoService.generateSalt();
+      final key = CryptoService.deriveKey(pin, salt);
+      final nonce = CryptoService.generateNonce();
+      final original = utf8.encode('Testing encryptAndHashChunkIsolate in isolate!');
+
+      final processed = await CryptoService.encryptAndHashChunkIsolate(original, key, nonce);
+      expect(processed.bytes.length, equals(original.length + 16));
+      expect(processed.sha256, equals(CryptoService.calculateSha256(processed.bytes)));
+
+      final decrypted = await CryptoService.verifyAndDecryptChunkIsolate(
+        processed.bytes,
+        key,
+        nonce,
+        processed.sha256,
+      );
+      expect(decrypted, equals(original));
+    });
+
+    test('verifyAndDecryptChunkIsolate throws when hash does not match', () async {
+      final salt = CryptoService.generateSalt();
+      final key = CryptoService.deriveKey(pin, salt);
+      final nonce = CryptoService.generateNonce();
+      final original = utf8.encode('Testing corrupted chunk');
+
+      final processed = await CryptoService.encryptAndHashChunkIsolate(original, key, nonce);
+
+      expect(
+        () => CryptoService.verifyAndDecryptChunkIsolate(
+          processed.bytes,
+          key,
+          nonce,
+          'wronghash00000000000000000000000000000000000000000000000000000000',
+        ),
+        throwsA(isA<Exception>()),
+      );
+    });
   });
 }

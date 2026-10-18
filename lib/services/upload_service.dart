@@ -83,42 +83,34 @@ class UploadService {
     final fileId = await databaseService.insertFile(cloudFile);
     onFileIdCreated?.call(fileId);
 
-    // Siapkan semua baris chunk di database dengan nonce dan sha256_chunk
+    // Siapkan baris chunk di database tanpa membaca isi file atau enkripsi di main isolate
     final createdChunks = <CloudChunk>[];
-    final raf = await file.open(mode: FileMode.read);
-    try {
-      for (int i = 0; i < totalChunks; i++) {
-        final start = i * chunkSize;
-        final currentLength = min(chunkSize, fileSize - start);
-        await raf.setPosition(start);
-        final rawSlice = await raf.read(currentLength);
+    for (int i = 0; i < totalChunks; i++) {
+      final start = i * chunkSize;
+      final currentLength = min(chunkSize, fileSize - start);
+      final nonce = CryptoService.generateNonce();
+      // AES-GCM menambah auth tag 16 byte ke ciphertext
+      final estimatedSize = currentLength + 16;
 
-        final nonce = CryptoService.generateNonce();
-        final encryptedSlice = CryptoService.encryptChunk(rawSlice, key, nonce);
-        final sha256Chunk = CryptoService.calculateSha256(encryptedSlice);
+      final chunk = CloudChunk(
+        fileId: fileId,
+        chunkIndex: i,
+        ukuranChunk: estimatedSize,
+        nonceHex: nonce,
+        sha256Chunk: '',
+        status: 'pending',
+      );
 
-        final chunk = CloudChunk(
-          fileId: fileId,
-          chunkIndex: i,
-          ukuranChunk: encryptedSlice.length,
-          nonceHex: nonce,
-          sha256Chunk: sha256Chunk,
-          status: 'pending',
-        );
-
-        final chunkId = await databaseService.insertChunk(chunk);
-        createdChunks.add(CloudChunk(
-          id: chunkId,
-          fileId: fileId,
-          chunkIndex: i,
-          ukuranChunk: encryptedSlice.length,
-          nonceHex: nonce,
-          sha256Chunk: sha256Chunk,
-          status: 'pending',
-        ));
-      }
-    } finally {
-      await raf.close();
+      final chunkId = await databaseService.insertChunk(chunk);
+      createdChunks.add(CloudChunk(
+        id: chunkId,
+        fileId: fileId,
+        chunkIndex: i,
+        ukuranChunk: estimatedSize,
+        nonceHex: nonce,
+        sha256Chunk: '',
+        status: 'pending',
+      ));
     }
 
     // Worker pool upload maks 2 paralel
@@ -175,11 +167,23 @@ class UploadService {
           await rafWorker.close();
         }
 
-        final encryptedSlice = CryptoService.encryptChunk(rawSlice, key, chunk.nonceHex);
+        // Enkripsi dan SHA-256 chunk di isolate latar agar UI tidak freeze
+        final processed = await CryptoService.encryptAndHashChunkIsolate(
+          rawSlice,
+          key,
+          chunk.nonceHex,
+        );
+
+        await databaseService.updateChunkStatus(
+          chunk.id!,
+          'uploading',
+          sha256Chunk: processed.sha256,
+          ukuranChunk: processed.bytes.length,
+        );
 
         final uploadResult = await telegramService.sendDocument(
-          encryptedSlice,
-          '${chunk.sha256Chunk}.bin',
+          processed.bytes,
+          '${processed.sha256}.bin',
           cancelToken: cancelToken,
         );
 
@@ -188,10 +192,12 @@ class UploadService {
           'done',
           tgFileId: uploadResult.fileId,
           tgMessageId: uploadResult.messageId,
+          sha256Chunk: processed.sha256,
+          ukuranChunk: processed.bytes.length,
         );
 
         completedCount++;
-        uploadedBytes += encryptedSlice.length;
+        uploadedBytes += processed.bytes.length;
         final progress = completedCount / totalChunks;
         onProgress?.call(
           progress,
@@ -278,20 +284,33 @@ class UploadService {
           await raf.close();
         }
 
-        // WAJIB via isolate (anti-freeze, lihat task list sebelumnya).
-        final enc = await CryptoService.encryptChunkIsolate(
-            rawSlice, key, chunk.nonceHex);
+        // Enkripsi dan SHA-256 chunk di isolate latar agar UI tidak freeze
+        final processed = await CryptoService.encryptAndHashChunkIsolate(
+          rawSlice,
+          key,
+          chunk.nonceHex,
+        );
+
+        await databaseService.updateChunkStatus(
+          chunk.id!,
+          'uploading',
+          sha256Chunk: processed.sha256,
+          ukuranChunk: processed.bytes.length,
+        );
 
         final uploadResult = await telegramService.sendDocument(
-          enc.bytes,
-          '${chunk.sha256Chunk}.bin',
+          processed.bytes,
+          '${processed.sha256}.bin',
           cancelToken: cancelToken,
         );
 
         await databaseService.updateChunkStatus(
-          chunk.id!, 'done',
+          chunk.id!,
+          'done',
           tgFileId: uploadResult.fileId,
           tgMessageId: uploadResult.messageId,
+          sha256Chunk: processed.sha256,
+          ukuranChunk: processed.bytes.length,
         );
 
         completedCount++;
